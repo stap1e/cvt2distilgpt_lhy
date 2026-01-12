@@ -1,19 +1,20 @@
-exp_dir: experiments
-dataset_dir: datasets
-ckpt_zoo_dir: checkpoints
+exp_dir: /data/lhy_data/Cvt2distillgpt2/results_iuxray
+dataset_dir: /data/lhy_data/Cvt2distillgpt2
+ckpt_zoo_dir: /data/lhy_data/Cvt2distillgpt2/checkpoints
 # venv_path: venv/bin/activate  # If using a SLURM cluster, uncomment this line.
-
-devices: 4
+seed: 9223
+trial: 9223
+devices: 1
 num_nodes: 1
-num_workers: 5
-strategy: ddp_find_unused_parameters_true
+num_workers: 6
+strategy: 'auto'
 
 module: cvt2distilgpt2_iu_x_ray_chen
 definition: CvT2DistilGPT2IUXRayChen
 
 encoder_lr: 5e-5
 decoder_lr: 5e-4
-mbatch_size: 4  # 4 * 4 devices = mini-batch size of 16.
+mbatch_size: 12  # 4 * 4 devices = mini-batch size of 16.
 every_n_epochs: 1
 
 monitor: 'val_chen_cider'
@@ -21,11 +22,14 @@ monitor_mode: 'max'
 precision: 16
 decoder_max_len: 128
 num_test_beams: 4
+max_epochs: 100
 
 enable_progress_bar: True
 weights_summary: 'full'
 
 early_stopping: True
-patience: 10
+patience: 20
 min_delta: 1e-4
 deterministic: False
+
+# CUDA_VISIBLE_DEVICES=0 dlhpcstarter -t iu_x_ray_chen -c config/train_iu_x_ray_chen_cvt2distilgpt2.yaml --stages_module stages --train

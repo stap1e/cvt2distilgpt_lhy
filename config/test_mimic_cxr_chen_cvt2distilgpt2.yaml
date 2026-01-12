@@ -1,17 +1,18 @@
-exp_dir: experiments
-dataset_dir: datasets
-ckpt_zoo_dir: checkpoints
+exp_dir: /data/lhy_data/Cvt2distillgpt2/results_mimic_cxr
+dataset_dir: /data/lhy_data/Cvt2distillgpt2
+ckpt_zoo_dir: /data/lhy_data/Cvt2distillgpt2/checkpoints
 # venv_path: venv/bin/activate  # If using a SLURM cluster, uncomment this line.
 
 devices: 1
 num_nodes: 1
 num_workers: 5
-strategy: ddp_find_unused_parameters_true
+strategy: auto
 
 module: cvt2distilgpt2_mimic_cxr_chen
 definition: CvT2DistilGPT2MIMICXRChen
 
-test_ckpt_path: checkpoints/mimic_cxr_jpg_chen/cvt_21_to_distilgpt2/epoch=8-val_chen_cider=0.425092.ckpt
+# test_ckpt_path: checkpoints/mimic_cxr_jpg_chen/cvt_21_to_distilgpt2/epoch=8-val_chen_cider=0.425092.ckpt
+test_ckpt_path: /data/lhy_data/Cvt2distillgpt2/results_mimic_cxr/mimic_cxr_chen/train_mimic_cxr_chen_cvt2distilgpt2/trial_0/epoch=14-step=1920-val_chen_cider=0.535580.ckpt
 
 encoder_lr: 5e-5
 decoder_lr: 5e-4
@@ -31,3 +32,5 @@ early_stopping: True
 patience: 10
 min_delta: 1e-4
 deterministic: False
+
+# CUDA_VISIBLE_DEVICES=1 dlhpcstarter -t mimic_cxr_chen -c config/test_mimic_cxr_chen_cvt2distilgpt2.yaml --stages_module stages --test
