@@ -28,7 +28,7 @@ enable_progress_bar: True
 weights_summary: 'full'
 
 early_stopping: True
-patience: 20
+patience: 10
 min_delta: 1e-4
 deterministic: False
 
