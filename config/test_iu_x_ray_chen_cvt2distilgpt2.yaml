@@ -1,8 +1,9 @@
-exp_dir: /data/lhy_data/Cvt2distillgpt2/results_iuxray
+exp_dir: /data/lhy_data/Cvt2distillgpt2/results_iuxray_lhy
 dataset_dir: /data/lhy_data/Cvt2distillgpt2
 ckpt_zoo_dir: /data/lhy_data/Cvt2distillgpt2/checkpoints
 # venv_path: venv/bin/activate  # If using a SLURM cluster, uncomment this line.
 seed: 9223
+trial: 9223
 devices: 1
 num_nodes: 1
 num_workers: 5
@@ -12,7 +13,7 @@ module: cvt2distilgpt2_iu_x_ray_chen
 definition: CvT2DistilGPT2IUXRayChen
 
 # test_ckpt_path: checkpoints/iu_x_ray_chen/cvt_21_to_distilgpt2/epoch=10-val_chen_cider=0.475024.ckpt
-test_ckpt_path: /data/lhy_data/Cvt2distillgpt2/results_iuxray/iu_x_ray_chen/train_iu_x_ray_chen_cvt2distilgpt2/trial_0/epoch=11-step=2076-val_chen_cider=0.444897.ckpt
+test_ckpt_path: /data/lhy_data/Cvt2distillgpt2/results_iuxray/iu_x_ray_chen_old1/train_iu_x_ray_chen_cvt2distilgpt2/trial_0/epoch=11-step=2076-val_chen_cider=0.444897.ckpt
 
 encoder_lr: 5e-5
 decoder_lr: 5e-4
@@ -33,4 +34,5 @@ patience: 10
 min_delta: 1e-4
 deterministic: False
 
-# CUDA_VISIBLE_DEVICES=5 dlhpcstarter -t iu_x_ray_chen -c config/test_iu_x_ray_chen_cvt2distilgpt2.yaml --stages_module stages --test
+use_ot_rag: False
+# CUDA_VISIBLE_DEVICES=0 dlhpcstarter -t iu_x_ray_chen -c config/test_iu_x_ray_chen_cvt2distilgpt2.yaml --stages_module stages --test --trial 9223

@@ -6,6 +6,7 @@ from dlhpcstarter.utils import (get_test_ckpt_path, importer,
                                 load_config_and_update_args,
                                 resume_from_ckpt_path, write_test_ckpt_path)
 from lightning.pytorch import seed_everything
+from utils import apply_ot_rag_patch
 
 # CUDA_VISIBLE_DEVICES=5 dlhpcstarter -t iu_x_ray_chen -c config/test_iu_x_ray_chen_cvt2distilgpt2.yaml --stages_module stages --test
 # CUDA_VISIBLE_DEVICES=5 dlhpcstarter -t iu_x_ray_chen -c config/train_iu_x_ray_chen_cvt2distilgpt2.yaml --stages_module stages --train
@@ -106,6 +107,8 @@ def stages(args: Namespace):
             write_test_ckpt_path(ckpt_path, args.exp_dir_trial)
 
             model = TaskModel.load_from_checkpoint(checkpoint_path=ckpt_path, **vars(args), strict=False)
-
+        # if hasattr(args, 'use_ot_rag') and args.use_ot_rag:
+        #     print(f"Using OT train-free....")
+        #     apply_ot_rag_patch(model) # 调用Train-free
         trainer.test(model)
 

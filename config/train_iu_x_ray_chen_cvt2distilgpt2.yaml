@@ -1,4 +1,4 @@
-exp_dir: /data/lhy_data/Cvt2distillgpt2/results_iuxray
+exp_dir: /data/lhy_data/Cvt2distillgpt2/results_iuxray_lhy
 dataset_dir: /data/lhy_data/Cvt2distillgpt2
 ckpt_zoo_dir: /data/lhy_data/Cvt2distillgpt2/checkpoints
 # venv_path: venv/bin/activate  # If using a SLURM cluster, uncomment this line.
