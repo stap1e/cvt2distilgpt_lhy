@@ -295,12 +295,13 @@ class CvT2DistilGPT2IUXRayChen(CvT2DistilGPT2MIMICXRChen):
         Returns:
             encoder_outputs - transformers.modeling_outputs.ModelOutput.
         """
-        img = torch.zeros_like(images)
+        # img = torch.zeros_like(images)
         # img = torch.ones_like(images)
         views = self.multi_input(images)
         image_features = self.encoder(views['images'])['last_hidden_state']
         image_features = self.encoder_projection(image_features)['projected_encoder_last_hidden_state']
         image_features = self.multi_output(image_features, views['images_per_example'])['last_hidden_state']
+        # c_features = torch.ones_like(image_features) * image_features.min()
         encoder_outputs = transformers.modeling_outputs.BaseModelOutput(last_hidden_state=image_features)
         return encoder_outputs
  

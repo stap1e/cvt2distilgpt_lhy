@@ -101,7 +101,7 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
         )
 
         # Decoder:
-        ckpt_name = 'distilgpt2'
+        ckpt_name = 'distilbert/distilgpt2'
         config = transformers.GPT2Config.from_pretrained(
             os.path.join(self.ckpt_zoo_dir, ckpt_name),
             local_files_only=True,
@@ -348,8 +348,13 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
         Returns:
             encoder_outputs - transformers.modeling_outputs.ModelOutput.
         """
+        # img = torch.ones_like(images)
+        # img = torch.zeros_like(images)
+        # img = torch.randn_like(images)
         image_features = self.encoder(images)['last_hidden_state']
         image_features = self.encoder_projection(image_features)['projected_encoder_last_hidden_state']
+        # print(f"min: {image_features.min()}, max: {image_features.max()}")
+        # c_features = torch.ones_like(image_features) * image_features.max()
         encoder_outputs = transformers.modeling_outputs.BaseModelOutput(last_hidden_state=image_features)
         return encoder_outputs
 
@@ -382,6 +387,8 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
         """
 
         encoder_outputs = self.encoder_forward(images)
+        # encoder_outputs = torch.ones_like(encoder_outputs)
+        # encoder_outputs = torch.zeros_like(encoder_outputs)
 
         outputs = self.decoder.encoder_decoder.generate(
             # special_token_ids=[self.tokenizer.sep_token_id],
