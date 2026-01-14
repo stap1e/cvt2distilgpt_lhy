@@ -190,48 +190,84 @@ def process_json_with_chexbert(json_path, model, target_split='train', batch_siz
 
     return results
 
+# def group_and_analyze_labels(data_list, times=40):
+#     """
+#     根据 labels 对数据进行分组，并统计每组数量。
+    
+#     Args:
+#         data_list: 包含 {'id':..., 'labels': [0,1...]} 的列表
+#     Returns:
+#         grouped_data: 字典 { label_tuple: [id1, id2, ...] }
+#     """
+#     # 1. 使用 defaultdict 方便存储
+#     # Key: 标签元组 (例如 (0, 0, 1, ...))
+#     # Value: 属于该组的样本 ID 列表
+#     grouped_data = defaultdict(list)
+    
+#     print("正在进行分组统计...")
+    
+#     for item in data_list:
+#         # 【关键步骤】将 list 转为 tuple，因为 list 不能做字典的 Key
+#         # 同时转为 int 看起来更整洁 (1.0 -> 1)
+#         label_key = tuple(int(x) for x in item['labels'])
+        
+#         grouped_data[label_key].append(item['id'])
+        
+#     # 2. 统计结果
+#     total_groups = len(grouped_data)
+    
+#     print(f"\n====== 分组统计结果 ======")
+#     print(f"总共有 {total_groups} 种不同的标签组合 (Unique Label Patterns)。")
+#     print(f"--------------------------------")
+    
+#     # 3. 按数量排序，打印前 20 个大组 (最常见的病理组合)
+#     # 按照 list 的长度 (即该组样本数) 降序排序
+#     sorted_groups = sorted(grouped_data.items(), key=lambda x: len(x[1]), reverse=True)
+    
+#     for i, (label_pattern, ids) in enumerate(sorted_groups):
+#         count = len(ids)
+#         if i < times: 
+#             print(f"Group {i+1}: Count = {count} | Label = {label_pattern}")
+#             # print(f"    Sample IDs (前3个): {ids[:3]}...") # 可选：查看部分ID
+        
+#     return grouped_data
+
 def group_and_analyze_labels(data_list, times=40):
     """
-    根据 labels 对数据进行分组，并统计每组数量。
-    
-    Args:
-        data_list: 包含 {'id':..., 'labels': [0,1...]} 的列表
-    Returns:
-        grouped_data: 字典 { label_tuple: [id1, id2, ...] }
+    1. 根据 labels 分组
+    2. 统计每组数量并显示 Sum (疾病总数)
+    3. 额外展示按 Sum 排序的结果 (查看最复杂的病例)
     """
-    # 1. 使用 defaultdict 方便存储
-    # Key: 标签元组 (例如 (0, 0, 1, ...))
-    # Value: 属于该组的样本 ID 列表
     grouped_data = defaultdict(list)
     
-    print("正在进行分组统计...")
-    
+    # --- 1. 分组 ---
     for item in data_list:
-        # 【关键步骤】将 list 转为 tuple，因为 list 不能做字典的 Key
-        # 同时转为 int 看起来更整洁 (1.0 -> 1)
         label_key = tuple(int(x) for x in item['labels'])
-        
         grouped_data[label_key].append(item['id'])
         
-    # 2. 统计结果
-    total_groups = len(grouped_data)
+    print(f"\n====== 分组统计结果 (共 {len(grouped_data)} 种组合) ======")
     
-    print(f"\n====== 分组统计结果 ======")
-    print(f"总共有 {total_groups} 种不同的标签组合 (Unique Label Patterns)。")
-    print(f"--------------------------------")
+    # --- 2. 按【样本数量】排序 (原需求优化) ---
+    print(f"--- [按样本数量排序] Top {times} Most Frequent ---")
+    sorted_by_count = sorted(grouped_data.items(), key=lambda x: len(x[1]), reverse=True)
     
-    # 3. 按数量排序，打印前 20 个大组 (最常见的病理组合)
-    # 按照 list 的长度 (即该组样本数) 降序排序
-    sorted_groups = sorted(grouped_data.items(), key=lambda x: len(x[1]), reverse=True)
-    
-    for i, (label_pattern, ids) in enumerate(sorted_groups):
-        count = len(ids)
-        if i < times: 
-            print(f"Group {i+1}: Count = {count} | Label = {label_pattern}")
-            # print(f"    Sample IDs (前3个): {ids[:3]}...") # 可选：查看部分ID
-        
-    return grouped_data
+    for i, (label_pattern, ids) in enumerate(sorted_by_count):
+        if i < times:
+            # 【新增功能】计算 sum
+            d_sum = sum(label_pattern) 
+            print(f"Group {i+1:04d}: Count = {len(ids):04d} | Sum = {d_sum:02d} | Label = {label_pattern}")
 
+    # --- 3. 按【疾病总数(Sum)】排序 (新增需求) ---
+    print(f"\n--- [按疾病总数排序] Top {times} Most Complex (Sum) ---")
+    # key=lambda x: sum(x[0]) 表示按 label tuple 的和排序
+    sorted_by_sum = sorted(grouped_data.items(), key=lambda x: sum(x[0]), reverse=True)
+    
+    for i, (label_pattern, ids) in enumerate(sorted_by_sum):
+        if i < times:
+            d_sum = sum(label_pattern)
+            print(f"Rank {i+1:04d}: Sum = {d_sum:02d} | Count = {len(ids):02d} | Label = {label_pattern}")
+            
+    return grouped_data
 # ==========================================
 # 4. 配置与运行
 # ==========================================
