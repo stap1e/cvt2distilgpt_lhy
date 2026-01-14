@@ -61,15 +61,15 @@ class CvT2DistilGPT2IUXRayChen(CvT2DistilGPT2MIMICXRChen):
 
         # CheXbert classification metrics:
         self.val_chexbert_metrics = CheXbertMetrics(
-            bert_path='bert-base-uncased',
-            checkpoint_path='stanford/chexbert/chexbert.pth',
+            bert_path='/mnt/data/liuhongyu/rg/checkpoints/bert-base-uncased',
+            checkpoint_path='/mnt/data/liuhongyu/rg/checkpoints/stanford/chexbert/chexbert.pth',
             ckpt_dir=self.ckpt_zoo_dir,
             mbatch_size=self.mbatch_size,
             exp_dir=self.exp_dir_trial,
         )
         self.test_chexbert_metrics = CheXbertMetrics(
-            bert_path='bert-base-uncased',
-            checkpoint_path='stanford/chexbert/chexbert.pth',
+            bert_path='/mnt/data/liuhongyu/rg/checkpoints/bert-base-uncased',
+            checkpoint_path='/mnt/data/liuhongyu/rg/checkpoints/stanford/chexbert/chexbert.pth',
             ckpt_dir=self.ckpt_zoo_dir,
             mbatch_size=self.mbatch_size,
             exp_dir=self.exp_dir_trial,
@@ -295,89 +295,10 @@ class CvT2DistilGPT2IUXRayChen(CvT2DistilGPT2MIMICXRChen):
         Returns:
             encoder_outputs - transformers.modeling_outputs.ModelOutput.
         """
+        img = torch.zeros_like(images)
+        # img = torch.ones_like(images)
         views = self.multi_input(images)
         image_features = self.encoder(views['images'])['last_hidden_state']
-        # # ================= [新增代码开始] =================
-        # # 仅在训练时且满足间隔要求时执行，避免拖慢速度
-        # save_dir = os.path.join('/data/lhy_data/MIMIC-CXR/invests', "debug_visualizations_IUXRAY")
-        # os.makedirs(save_dir, exist_ok=True)
-        # global_step = 2
-        # save_path = os.path.join(save_dir, f"init_{global_step}.jpg")
-
-        # # --- A. 数据准备 (取 Batch 中的第一个样本) ---
-        # # 必须使用 .detach().cpu()
-        # img_tensor = images[global_step, 0].detach().cpu()          # shape [3, H, W]
-        # feat_tensor = image_features[global_step].detach().cpu()   # shape [Seq_Len, Dim]
-
-        # # --- B. 处理原始图片 (用于显示) ---
-        # # 需要反归一化 (假设使用了 ImageNet 的均值和方差)
-        # mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
-        # std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-        # img_show = img_tensor * std + mean
-        # # 转换维度为 [H, W, C] 并限制在 [0,1] 范围内供 matplotlib 显示
-        # img_show = img_show.permute(1, 2, 0).clamp(0, 1).numpy()
-
-        # # --- C. 处理特征图 (用于制作热力图) ---
-        # # CvT 的输出通常是 Sequence 形式，需要reshape回空间尺寸
-        # seq_len, dim = feat_tensor.shape
-        # if feat_tensor.shape[1] == 576: 
-        #     # 情况 A: [Channels, Seq_Len] -> [384, 576]
-        #     # 我们需要在 Channel 维度 (dim=0) 上做平均，把 384 个通道压缩成 1 个值
-        #     activation = feat_tensor.mean(dim=0) # 结果 shape: [576]
-        #     side = int(np.sqrt(576)) # 24
-        #     activation_map = activation.view(side, side).numpy() # [24, 24]
-                
-        # elif feat_tensor.shape[0] == 576:
-        #     # 情况 B: [Seq_Len, Channels] -> [576, 384] (防止万一形状反转)
-        #     activation = feat_tensor.mean(dim=1) 
-        #     side = int(np.sqrt(576))
-        #     activation_map = activation.view(side, side).numpy()
-            
-        # else:
-        #     # 情况 C: 可能包含 CLS token (例如 577)
-        #     seq_len = max(feat_tensor.shape) # 假设长的那边是序列
-        #     if int(np.sqrt(seq_len - 1)) ** 2 == seq_len - 1:
-        #         # 有 CLS token，找到它并移除
-        #         spatial_dim_idx = 0 if feat_tensor.shape[0] == seq_len else 1
-        #         channel_dim_idx = 1 - spatial_dim_idx
-                
-        #         # 移除 CLS (通常是第0个或最后1个，这里假设第0个)
-        #         # 先转成 [Seq, Chan] 方便处理
-        #         if spatial_dim_idx == 1:
-        #             feat_temp = feat_tensor.permute(1, 0) # 变成 [577, 384]
-        #         else:
-        #             feat_temp = feat_tensor
-                
-        #         activation = feat_temp[1:, :].mean(dim=1) # 除去第一个token后求均值
-        #         side = int(np.sqrt(seq_len - 1))
-        #         activation_map = activation.view(side, side).numpy()
-        #     else:
-        #         print(f"[Debug Warning] Unknown shape {feat_tensor.shape}, skipping.")
-        #         activation_map = None
-
-        # # --- D. 绘图 (只有当 activation_map 成功生成时) ---
-        # if activation_map is not None:
-        #     fig, axs = plt.subplots(1, 2, figsize=(12, 6))
-            
-        #     # 左图：原始图片
-        #     axs[0].imshow(img_show)
-        #     axs[0].set_title(f"Step {self.global_step}: Input")
-        #     axs[0].axis('off')
-            
-        #     # 右图：特征热力图
-        #     # Resize 到原图大小看起来更直观 (可选，这里用插值放大)
-        #     import cv2
-        #     # 将 24x24 的热力图放大到 384x384 方便叠加对比，或者直接显示 24x24
-        #     # 这里直接显示原始分辨率 24x24，能看清具体的激活 Patch
-        #     im = axs[1].imshow(activation_map, cmap='jet') 
-        #     axs[1].set_title(f"Feature Activation ({activation_map.shape[0]}x{activation_map.shape[1]})")
-        #     axs[1].axis('off')
-        #     fig.colorbar(im, ax=axs[1], fraction=0.046, pad=0.04)
-
-        #     plt.tight_layout()
-        #     plt.savefig(save_path, format='jpg', dpi=150, bbox_inches='tight')
-        #     plt.close(fig)
-        #     print(f"[Debug] Saved visualization to {save_path}")
         image_features = self.encoder_projection(image_features)['projected_encoder_last_hidden_state']
         image_features = self.multi_output(image_features, views['images_per_example'])['last_hidden_state']
         encoder_outputs = transformers.modeling_outputs.BaseModelOutput(last_hidden_state=image_features)

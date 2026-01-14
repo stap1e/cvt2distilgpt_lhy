@@ -22,6 +22,7 @@ from radgraph.utils import (
 
 from radgraph.rewards import compute_reward
 # from appdirs import user_cache_dir
+from transformers import AutoTokenizer, AutoModel
 
 # CACHE_DIR = user_cache_dir("radgraph")
 CACHE_DIR = r'/mnt/data/liuhongyu/rg/checkpoints'
@@ -185,3 +186,78 @@ class F1RadGraph(nn.Module):
             hypothesis_annotation_lists,
             reference_annotation_lists,
         )
+
+class TextFeatureExtractor(nn.Module):
+    """
+    专门用于计算 mu_text 的辅助模块
+    包含: RadGraph (提取实体) + BERT (提取特征)
+    """
+    def __init__(self, radgraph_path, bert_path='bert-base-uncased', device='cuda'):
+        super().__init__()
+        self.device_name = device
+        
+        # 1. 初始化 RadGraph
+        print(f"Loading RadGraph from {radgraph_path}...")
+        self.radgraph = RadGraph(model_path=radgraph_path)
+        
+        # 2. 初始化用于特征提取的 BERT
+        print(f"Loading Text Encoder from {bert_path}...")
+        self.bert_tokenizer = AutoTokenizer.from_pretrained(bert_path)
+        self.bert_model = AutoModel.from_pretrained(bert_path)
+        
+        # 冻结 BERT 参数 (通常计算 mu_text 时不需要更新 BERT，视你的需求而定)
+        for param in self.bert_model.parameters():
+            param.requires_grad = False
+
+    def forward(self, reports):
+        """
+        输入: report list (e.g., ["lung is clear", ...])
+        输出: mu_text (Batch, Hidden_dim)
+        """
+        # 使用 RadGraph 获取实体 inference_dict key: '0', '1'...
+        inference_dict = self.radgraph(reports)
+        # BERT Tokenize padding=True, truncation=True, return_tensors='pt'
+        inputs = self.bert_tokenizer(reports, padding=True, truncation=True, 
+                                   max_length=512, return_tensors="pt").to(self.bert_model.device)
+        input_ids = inputs['input_ids']
+        attention_mask = inputs['attention_mask'] # BERT 原生 mask (padding)
+
+        # BERT Embeddings
+        with torch.no_grad():
+            outputs = self.bert_model(**inputs)
+            last_hidden_state = outputs.last_hidden_state  # [B, L, 768]
+
+        # (Entity Mask)
+        batch_size, seq_len = input_ids.shape
+        entity_mask = torch.zeros((batch_size, seq_len), device=last_hidden_state.device)
+
+        for idx, report in enumerate(reports):
+            # RadGraph 结果
+            entities = inference_dict[str(idx)].get('entities', {})
+            curr_input_ids = input_ids[idx].tolist()
+            
+            # 如果没有实体，默认使用 [CLS] token 或者整个句子的 embedding
+            if not entities:
+                entity_mask[idx] = attention_mask[idx]
+                continue
+
+            for _, entity_info in entities.items():
+                entity_text = entity_info['tokens'] # string
+                entity_token_ids = self.bert_tokenizer.encode(entity_text, add_special_tokens=False) # 将实体文本转为 BERT token ids (不带 special tokens)
+                
+                # (Sub-sequence Matching)
+                len_entity = len(entity_token_ids)
+                if len_entity == 0: continue
+
+                # 滑动窗口匹配
+                for i in range(len(curr_input_ids) - len_entity + 1):
+                    if curr_input_ids[i : i + len_entity] == entity_token_ids:
+                        entity_mask[idx, i : i + len_entity] = 1.0
+        
+        # (Masked Average Pooling)
+        mask_expanded = entity_mask.unsqueeze(-1)
+        sum_mask = torch.clamp(mask_expanded.sum(1), min=1e-9)
+        
+        mu_text = (last_hidden_state * mask_expanded).sum(1) / sum_mask
+        
+        return mu_text

@@ -68,15 +68,15 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
 
         # CheXbert classification metrics:
         self.val_chexbert_metrics = CheXbertMetrics(
-            bert_path='bert-base-uncased',
-            checkpoint_path='stanford/chexbert/chexbert.pth',
+            bert_path='/mnt/data/liuhongyu/rg/checkpoints/bert-base-uncased',
+            checkpoint_path='/mnt/data/liuhongyu/rg/checkpoints/stanford/chexbert/chexbert.pth',
             ckpt_dir=self.ckpt_zoo_dir,
             mbatch_size=self.mbatch_size,
             exp_dir=self.exp_dir_trial,
         )
         self.test_chexbert_metrics = CheXbertMetrics(
-            bert_path='bert-base-uncased',
-            checkpoint_path='stanford/chexbert/chexbert.pth',
+            bert_path='/mnt/data/liuhongyu/rg/checkpoints/bert-base-uncased',
+            checkpoint_path='/mnt/data/liuhongyu/rg/checkpoints/stanford/chexbert/chexbert.pth',
             ckpt_dir=self.ckpt_zoo_dir,
             mbatch_size=self.mbatch_size,
             exp_dir=self.exp_dir_trial,

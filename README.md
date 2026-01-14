@@ -1,21 +1,5 @@
 # CvT2DistilGPT2
 
-#### BibTeX citation:
-```bibtex
-@article{nicolson_improving_2023,
-	title = {Improving chest {X}-ray report generation by leveraging warm starting},
-	volume = {144},
-	issn = {0933-3657},
-	url = {https://www.sciencedirect.com/science/article/pii/S0933365723001471},
-	doi = {https://doi.org/10.1016/j.artmed.2023.102633},
-	journal = {Artificial Intelligence in Medicine},
-	author = {Nicolson, Aaron and Dowling, Jason and Koopman, Bevan},
-	year = {2023},
-	keywords = {Chest X-ray report generation, Image captioning, Multi-modal learning, Warm starting},
-	pages = {102633},
-}
-```
-
 #### Improving Chest X-Ray Report Generation by Leveraging Warm-Starting:
 - This repository houses the code for CvT2DistilGPT2 from https://doi.org/10.1016/j.artmed.2023.102633.
 - Implemented in [PyTorch Lightning](https://pytorch-lightning.readthedocs.io/).
