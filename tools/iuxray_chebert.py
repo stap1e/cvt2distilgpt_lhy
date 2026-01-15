@@ -274,7 +274,7 @@ def group_and_analyze_labels(data_list, times=40):
 if __name__ == "__main__":
     # --- 配置区域 ---
     # 请修改为你的实际路径
-    CKPT_DIR = "/mnt/data/liuhongyu/rg/checkpoints/chexbert_weights" # 存放 bert_config.json 和 .pt 的目录
+    CKPT_DIR = "/mnt/data/liuhongyu/rg/iu_x-ray_chen/chexbert_weights" # 存放 bert_config.json 和 .pt 的目录
     BERT_PATH = "/mnt/data/liuhongyu/rg/checkpoints/bert-base-uncased" # 或者绝对路径 "/path/to/bert-base-uncased"
     CHECKPOINT_FILE = "/mnt/data/liuhongyu/rg/checkpoints/stanford/chexbert/chexbert.pth" # 你的 chexbert 权重文件名
     JSON_PATH = "/mnt/data/liuhongyu/IUXRay/hergen_iuxray.json"
