@@ -23,6 +23,7 @@ precision: 16
 decoder_max_len: 128
 num_test_beams: 4
 max_epochs: 100
+save_top_k: 3
 
 enable_progress_bar: True
 weights_summary: 'full'
