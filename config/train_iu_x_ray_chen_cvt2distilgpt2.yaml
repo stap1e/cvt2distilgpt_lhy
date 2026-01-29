@@ -29,8 +29,8 @@ enable_progress_bar: True
 weights_summary: 'full'
 
 early_stopping: True
-patience: 10
+patience: 20
 min_delta: 1e-4
 deterministic: False
 
-# CUDA_VISIBLE_DEVICES=3 dlhpcstarter -t iu_x_ray_ot -c config/train_iu_x_ray_chen_cvt2distilgpt2.yaml --stages_module stages --train
+# CUDA_VISIBLE_DEVICES=3 dlhpcstarter -t iu_x_ray_cls1_5e-5 -c config/train_iu_x_ray_chen_cvt2distilgpt2.yaml --stages_module stages --train

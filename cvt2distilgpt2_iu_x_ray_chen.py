@@ -18,6 +18,10 @@ from tools.metrics.report_logger import ReportLogger
 from tools.multi_image import MultiImageInput, MultiImageOutput
 import matplotlib.pyplot as plt
 import numpy as np
+import torch.nn as nn
+from tools.ot_utils import UOTLoss, SelKDLoss
+from types import SimpleNamespace
+from tools.tta import SKMultiLoss
 plt.switch_backend('agg')
 
 class CvT2DistilGPT2IUXRayChen(CvT2DistilGPT2MIMICXRChen):
@@ -195,15 +199,81 @@ class CvT2DistilGPT2IUXRayChen(CvT2DistilGPT2MIMICXRChen):
             ]
         )
 
+        # for otalign
+        # self.visual_dummy = nn.Parameter(torch.randn(1, 1, 768))
+        # self.uot_loss_fn = UOTLoss(rho=0.1, epsilon=0.1, n_iters=30)
+        # self.selkd_loss = SelKDLoss(rho=1.0, epsilon=0.05, n_iters=5)
+        self.lambda_uot = 0.
+        self.disease_labels_file_path = "/mnt/data/liuhongyu/IUXRay/multi_hot_label.json"
+        self.num_diseases = 14
+        self.num_classes = 4 # Unmentioned, Positive, Negative, Unclear
+        # 也可以是 MLP (Linear -> ReLU -> Linear)
+        self.cls_head = nn.Linear(768, self.num_diseases * self.num_classes)
+
+        self.tta_config = SimpleNamespace(
+            wsi_sk_weight=0.5,      # Instance Loss Weight (lambda_inst)
+            num_heads=5,            # Multi-head numbers
+            sk_epsilon=1.0,         # Sinkhorn Entropy regularization (通常设为1或0.1)
+            sk_iter_limit=200,       # Sinkhorn 最大迭代次数
+            ot_frame='mm',       # OT 计算范围
+            sk_type='sppot',     # ["ppot", "sppot", "sppot_stable"]
+            rho_base=0.1,           # Curriculum Mass 起始值
+            rho_upper=1.0,          # Curriculum Mass 最大值
+            gamma_base=1.0,         # KL constraint weight (gamma)
+            ema_mm=1.0,
+            mm_factor= 0.5,
+            mm_iter_limit=100,
+        )
+        if self.tta_config.wsi_sk_weight > 0:
+            self.sk_loss = SKMultiLoss(
+                num_heads=self.tta_config.num_heads,
+                sk_type=self.tta_config.sk_type,
+                ot_frame=self.tta_config.ot_frame,
+                sk_iter_limit=self.tta_config.sk_iter_limit,
+                epsilon=self.tta_config.sk_epsilon,
+            )
+            print(f"✅ TTA SKMultiLoss initialized with weight {self.tta_config.wsi_sk_weight}")
+        else:
+            print(f"❌ TTA SKMultiLoss SKIPPED (Weight={self.tta_config.wsi_sk_weight})")
+
     def setup(self, stage=None):
         """
         https://pytorch-lightning.readthedocs.io/en/stable/common/lightning_module.html#setup
         """
-
         with open(self.labels_file_path) as f:
             examples = json.load(f)
 
-        # Dataset statistics:
+        if hasattr(self, "disease_labels_file_path") and self.disease_labels_file_path:
+            print(f"Loading disease labels from: {self.disease_labels_file_path}")
+            with open(self.disease_labels_file_path, 'r') as f_labels:
+                disease_map = json.load(f_labels) 
+
+            def inject_disease_labels(data_list, split_name="unknown"):
+                matched_count = 0
+                missing_count = 0
+                for item in data_list:
+                    raw_id = item.get('id')
+                    if not raw_id: continue
+                    
+                    # ID 归一化: 提取纯文件名 (e.g., "1fa79752")
+                    clean_id = os.path.splitext(os.path.basename(raw_id))[0]
+
+                    if clean_id in disease_map:
+                        item['disease_labels'] = disease_map[clean_id]
+                        matched_count += 1
+                    else:
+                        missing_count += 1
+                        # 先填充默认值，具体报错逻辑交给 format_examples 处理
+                        item['disease_labels'] = [0] * 14 
+                
+                print(f"[{split_name}] Disease Labels: {matched_count} matched, {missing_count} missing.")
+                if split_name == 'train' and matched_count == 0 and len(data_list) > 0:
+                     raise ValueError("Fatal Error: No disease labels matched for TRAIN set! Check ID formats.")
+
+            if "train" in examples: inject_disease_labels(examples["train"], split_name="train")
+            if "val" in examples: inject_disease_labels(examples["val"], split_name="val")
+            if "test" in examples: inject_disease_labels(examples["test"], split_name="test")
+
         images = set()
         for i in examples["train"]:
             images.update(i["image_path"])
@@ -231,10 +301,10 @@ class CvT2DistilGPT2IUXRayChen(CvT2DistilGPT2MIMICXRChen):
             )
         )
 
-        # Assign train & validation sets:
+        # 3. 分配数据集 (Assign Datasets)
         if stage == "fit" or stage is None:
             self.train_set = TaskSubset(
-                examples=self.format_examples(examples["train"]),
+                examples=self.format_examples(examples["train"], split="train"),
                 tokenizer=self.tokenizer,
                 decoder_max_len=self.decoder_max_len,
                 colour_space='RGB',
@@ -246,45 +316,65 @@ class CvT2DistilGPT2IUXRayChen(CvT2DistilGPT2MIMICXRChen):
             )
 
             self.val_set = TaskSubset(
-                examples=self.format_examples(examples["val"]),
+                examples=self.format_examples(examples["val"], split="val"),
                 tokenizer=self.tokenizer,
                 decoder_max_len=self.decoder_max_len,
                 colour_space='RGB',
                 transforms=self.test_transforms,
                 add_bos_eos_manually=True,
             )
-            print(
-                "No. of training & validation examples: {} & {}.".format(
-                    self.train_set.__len__(), self.val_set.__len__()
-                )
-            )
+            print(f"No. of training & validation examples: {self.train_set.__len__()} & {self.val_set.__len__()}.")
 
-        # Assign test set:
         if stage == "test" or stage is None:
             self.test_set = TaskSubset(
-                examples=self.format_examples(examples["test"]),
+                examples=self.format_examples(examples["test"], split="test"),
                 tokenizer=self.tokenizer,
                 decoder_max_len=self.decoder_max_len,
                 colour_space='RGB',
                 transforms=self.test_transforms,
                 add_bos_eos_manually=True,
             )
-            print(
-                "No. of test examples: {}.".format(
-                    self.test_set.__len__()
-                )
-            )
+            print(f"No. of test examples: {self.test_set.__len__()}.")
 
-    def format_examples(self, examples):
+    def format_examples(self, examples, split="train"):
+        """
+        :param examples: 数据列表
+        :param split: 当前处理的数据集名称 ('train', 'val', 'test')
+        """
+        NUM_LABELS = 14 
+        missing_count = 0
+
         for i in examples:
-            i["image_file_path"] = i.pop("image_path")
-            i["label"] = i.pop("report")
-            i["image_file_path"] = [os.path.join(self.dataset_dir, j) for j in i["image_file_path"]]
-            i["label"] = self.chen_tokenizer(i["label"])[:self.chen_max_seq_length]
-            i["label"] = self.chen_tokenizer.decode(i["label"][1:])
+            if "image_path" in i:
+                i["image_file_path"] = i.pop("image_path")
+            
+            if "disease_labels" in i:
+                i["disease_labels"] = torch.tensor(i["disease_labels"], dtype=torch.long)
+            else:
+                if split == "train":
+                    error_id = i.get('id', 'unknown')
+                    raise ValueError(f"Fatal Error: Training sample {error_id} is missing 'disease_labels'! Training cannot proceed.")
+                else:
+                    i["disease_labels"] = torch.zeros(NUM_LABELS, dtype=torch.long)
+                    missing_count += 1
+
+            if "report" in i:
+                i["label"] = i.pop("report")
+            
+            if isinstance(i["image_file_path"], list):
+                 i["image_file_path"] = [os.path.join(self.dataset_dir, j) for j in i["image_file_path"]]
+            else:
+                 i["image_file_path"] = os.path.join(self.dataset_dir, i["image_file_path"])
+
+            tokenized = self.chen_tokenizer(i["label"])[:self.chen_max_seq_length]
+            i["label"] = self.chen_tokenizer.decode(tokenized[1:]) if len(tokenized) > 1 else ""
+
+        if missing_count > 0:
+            print(f"[{split.upper()}] Warning: Filled {missing_count} samples with zero-labels (Normal for inference).")
+            
         return examples
 
-    def encoder_forward(self, images):
+    def encoder_forward(self, images, return_feats=False):
         """
         Encoder forward propagation.
 
@@ -301,7 +391,12 @@ class CvT2DistilGPT2IUXRayChen(CvT2DistilGPT2MIMICXRChen):
         image_features = self.encoder(views['images'])['last_hidden_state']
         image_features = self.encoder_projection(image_features)['projected_encoder_last_hidden_state']
         image_features = self.multi_output(image_features, views['images_per_example'])['last_hidden_state']
+        # batch_size = image_features.shape[0]
+        # dummy_vector = self.visual_dummy.expand(batch_size, -1, -1)
+        # image_features_with_dummy_vector = torch.cat([image_features, dummy_vector], dim=1)
         # c_features = torch.ones_like(image_features) * image_features.min()
         encoder_outputs = transformers.modeling_outputs.BaseModelOutput(last_hidden_state=image_features)
+        if return_feats:
+            return encoder_outputs, image_features
+        
         return encoder_outputs
- 

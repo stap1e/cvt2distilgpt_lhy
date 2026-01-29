@@ -33,4 +33,4 @@ patience: 10
 min_delta: 1e-4
 deterministic: False
 
-# CUDA_VISIBLE_DEVICES=1 dlhpcstarter -t mimic_cxr_ot -c config/train_mimic_cxr_chen_cvt2distilgpt2.yaml --stages_module stages --train
+# CUDA_VISIBLE_DEVICES=2 dlhpcstarter -t mimic_cxr_cls1 -c config/train_mimic_cxr_chen_cvt2distilgpt2.yaml --stages_module stages --train

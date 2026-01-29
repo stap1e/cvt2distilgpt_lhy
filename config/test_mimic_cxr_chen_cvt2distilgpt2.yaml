@@ -12,8 +12,7 @@ module: cvt2distilgpt2_mimic_cxr_chen
 definition: CvT2DistilGPT2MIMICXRChen
 
 # test_ckpt_path: checkpoints/mimic_cxr_jpg_chen/cvt_21_to_distilgpt2/epoch=8-val_chen_cider=0.425092.ckpt
-test_ckpt_path: /mnt/data/liuhongyu/rg/results/mimic_cxr/origin_baseline/epoch=42-step=521289-val_chen_cider=0.431418.ckpt
-
+test_ckpt_path: /mnt/data/liuhongyu/rg/results/mimic_cxr/mimic_cxr_cls0.5_consist0.1/train_mimic_cxr_chen_cvt2distilgpt2/trial_9223/epoch=16-step=206091-val_chen_cider=0.408788.ckpt
 encoder_lr: 5e-5
 decoder_lr: 5e-4
 mbatch_size: 4  
@@ -33,4 +32,4 @@ patience: 10
 min_delta: 1e-4
 deterministic: False
 
-# CUDA_VISIBLE_DEVICES=2 dlhpcstarter -t mimic_cxr_white_inner -c config/test_mimic_cxr_chen_cvt2distilgpt2.yaml --stages_module stages --test
+# CUDA_VISIBLE_DEVICES=3 dlhpcstarter -t mimic_cxr_cls0.5_consist0.1 -c config/test_mimic_cxr_chen_cvt2distilgpt2.yaml --stages_module stages --test

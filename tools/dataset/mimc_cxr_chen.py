@@ -18,6 +18,7 @@ class TaskSubset(Subset):
             "encoder_images": image,
             "labels": example["label"],
             'image_filepaths': example["image_file_path"][0],
+            "disease_labels": example["disease_labels"]
         }
         if self.train and not self.self_critical:
             example_dict = {**example_dict, **self.tokenize(example["label"])}
