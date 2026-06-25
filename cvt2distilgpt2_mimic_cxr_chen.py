@@ -56,12 +56,8 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
         )
         self.dataset_dir = os.path.join(
             self.dataset_dir,
+            "mimic_cxr_chen",
             "mimic_cxr_jpg",
-            "physionet.org",
-            "files",
-            "mimic-cxr-jpg",
-            "2.0.0",
-            "files",
         )
         self.chen_tokenizer = TokenizerChen(
             ann_path=self.labels_file_path,
@@ -113,17 +109,24 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
         )
 
         # Decoder:
-        ckpt_name = 'distilgpt2'
+        ckpt_name = 'distilbert/distilgpt2'
+        decoder_ckpt_path = os.path.join(self.ckpt_zoo_dir, ckpt_name)
+        if not os.path.isdir(decoder_ckpt_path):
+            raise FileNotFoundError(
+                f'Local decoder checkpoint directory not found: {decoder_ckpt_path}. '
+                f'Please download distilgpt2 into this directory before running.'
+            )
+
         config = transformers.GPT2Config.from_pretrained(
-            os.path.join(self.ckpt_zoo_dir, ckpt_name),
+            decoder_ckpt_path,
             local_files_only=True,
         )
         config.add_cross_attention = True
         config.is_decoder = True
 
         if self.warm_start_modules:
-            decoder = transformers.GPT2LMHeadModel.from_pretrained(            
-                os.path.join(self.ckpt_zoo_dir, ckpt_name),
+            decoder = transformers.GPT2LMHeadModel.from_pretrained(
+                decoder_ckpt_path,
                 local_files_only=True,
                 config=config,
             )
@@ -135,7 +138,7 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
 
         # Decoder tokenizer:
         self.tokenizer = transformers.GPT2TokenizerFast.from_pretrained(
-            os.path.join(self.ckpt_zoo_dir, ckpt_name),
+            decoder_ckpt_path,
             local_files_only=True,
         )
         self.tokenizer.add_special_tokens({"bos_token": "[BOS]", 'pad_token': '[PAD]'})
@@ -150,22 +153,28 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
                     print(f'additional_special_token, {i}, {j}')
 
         # We don't actually want to use the encoder of the EncoderDecoderModel, create a dummy encoder:
-        class DummyEncoder:
+        class DummyEncoder(torch.nn.Module):
             main_input_name = 'dummy'
 
             class DummyConfig(PretrainedConfig):
                 model_type = 'bert'
 
-            config = DummyConfig()
-
             def __init__(self, hidden_size):
+                super().__init__()
+                self.config = self.DummyConfig()
                 self.config.hidden_size = hidden_size
-            
-            def get_output_embeddings(cls):
+
+            def get_output_embeddings(self):
                 return None
 
             def forward(self):
                 return None
+
+            def tie_weights(self):
+                pass
+
+            def _init_weights(self, module):
+                pass
 
         # Use Hugging Face Transformers EncoderDecoderModel to generate conditionally:
         dummy_encoder = DummyEncoder(hidden_size=decoder.config.hidden_size)
