@@ -129,8 +129,14 @@ class COCOCaptionMetrics(Metric):
 
         predictions, labels = {}, {}
         for i, j, k in zip(self.ids, self.predictions, self.labels):
-            predictions[i] = [re.sub(' +', ' ', j.replace(".", " ."))]
-            labels[i] = [re.sub(' +', ' ', k.replace(".", " ."))]
+            if isinstance(j, (list, tuple)):
+                j = j[0]
+            if isinstance(k, str):
+                references = [k]
+            else:
+                references = list(k)
+            predictions[i] = [re.sub(' +', ' ', str(j).replace(".", " ."))]
+            labels[i] = [re.sub(' +', ' ', str(ref).replace(".", " .")) for ref in references]
         accumulated_scores = {}
         example_scores = {}
         if "bleu" in self.metrics:

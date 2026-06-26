@@ -10,8 +10,21 @@ class CheXbert(nn.Module):
 
         self.device = device
 
-        self.tokenizer = BertTokenizer.from_pretrained(bert_path)
-        config = BertConfig().from_pretrained(os.path.join(ckpt_dir, bert_path), local_files_only=True)
+        bert_dir = os.path.join(ckpt_dir, bert_path)
+        if not os.path.isdir(bert_dir):
+            raise FileNotFoundError(
+                f'Local BERT checkpoint directory not found: {bert_dir}. '
+                f'Please download bert-base-uncased into this directory before running CheXbert metrics.'
+            )
+
+        self.tokenizer = BertTokenizer.from_pretrained(
+            bert_dir,
+            local_files_only=True,
+        )
+        config = BertConfig.from_pretrained(
+            bert_dir,
+            local_files_only=True,
+        )
 
         with torch.no_grad():
 

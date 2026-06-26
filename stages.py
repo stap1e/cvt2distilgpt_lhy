@@ -79,10 +79,12 @@ def stages(args: Namespace):
                 model = TaskModel(**vars(args))
         else:
 
-            if hasattr(args, 'other_exp_dir'):
+            if getattr(args, 'other_exp_dir', None):
 
                 # The experiment trial directory of the other configuration:
+                print(f"========================args.other_exp_dir: {args.other_exp_dir}")
                 other_exp_dir_trial = os.path.join(args.other_exp_dir, f'trial_{args.trial}')
+                print(f"========================other_exp_dir_trial: {other_exp_dir_trial}")
 
                 # Get the path to the best performing checkpoint
                 ckpt_path = get_test_ckpt_path(
@@ -95,8 +97,9 @@ def stages(args: Namespace):
                 ckpt_path = get_test_ckpt_path(
                     args.exp_dir_trial, args.monitor, args.monitor_mode, args.test_epoch, args.test_ckpt_path,
                 )
+                print(f"========================ckpt_path: {ckpt_path}")
 
-            print('Testing checkpoint: {}.'.format(ckpt_path))
+            print('========================Testing checkpoint: {}.'.format(ckpt_path))
             write_test_ckpt_path(ckpt_path, args.exp_dir_trial)
 
             model = TaskModel.load_from_checkpoint(checkpoint_path=ckpt_path, **vars(args), strict=False)
