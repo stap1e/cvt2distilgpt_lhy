@@ -1,0 +1,49 @@
+exp_dir: /data/lhy_data/rg/results_mimic_cxr
+dataset_dir: /data/lhy_data/rg
+ckpt_zoo_dir: /data/lhy_data/rg/checkpoints
+# venv_path: venv/bin/activate  # If using a SLURM cluster, uncomment this line.
+seed: 9223
+trial: 9223
+devices: 1
+num_nodes: 1
+num_workers: 6
+strategy: 'auto'
+
+module: cvt2distilgpt2_mimic_cxr_chen
+definition: CvT2DistilGPT2MIMICXRChen
+
+encoder_lr: 1e-6
+decoder_lr: 1e-5
+mbatch_size: 16  # 4 * 4 devices = mini-batch size of 16.
+every_n_epochs: 1
+
+monitor: 'val_chen_cider'
+monitor_mode: 'max'
+precision: 16
+decoder_max_len: 128
+num_test_beams: 4
+max_epochs: 20
+
+enable_progress_bar: True
+weights_summary: 'full'
+
+early_stopping: True
+patience: 5
+min_delta: 1e-4
+deterministic: False
+
+# stage2 config
+train_mode: dpo
+warm_start_ckpt_path: /data/lhy_data/rg/results_mimic_cxr/mimic_cxr_baseline/train_mimic_cxr_chen_cvt2distilgpt2/trial_0/epoch=10-step=100012-val_chen_cider=0.412942.ckpt
+dpo_pair_path: /data/lhy_data/rg/results_mimic_cxr_dpo/pref_cache/dpo_pairs_train_raw.jsonl
+dpo_beta: 0.1
+dpo_ce_weight: 0.1
+dpo_reference_free: true
+resume_last: false
+dpo_missing_pair_policy: ce
+
+resumeresume_last: false
+resume_epoch:
+resume_ckpt_path:
+
+# CUDA_VISIBLE_DEVICES=2 dlhpcstarter -t mimic_cxr_dpo -c config/train_stage2.yaml --stages_module stages --train
