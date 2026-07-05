@@ -14,7 +14,7 @@ definition: CvT2DistilGPT2MIMICXRChen
 
 encoder_lr: 1e-6
 decoder_lr: 1e-5
-mbatch_size: 16  # 4 * 4 devices = mini-batch size of 16.
+mbatch_size: 8  # 4 * 4 devices = mini-batch size of 16.
 every_n_epochs: 1
 
 monitor: 'val_chen_cider'
