@@ -15,7 +15,7 @@ definition: CvT2DistilGPT2MIMICXRVisualGrounded
 train_mode: 'ce'
 encoder_lr: 5e-5
 decoder_lr: 5e-4
-mbatch_size: 4
+mbatch_size: 12
 prefetch_factor: 5
 every_n_epochs: 1
 
@@ -59,4 +59,4 @@ deterministic: false
 # CUDA_VISIBLE_DEVICES=2 dlhpcstarter -t mimic_cxr_visual_grounded \
 #   -c config/train_mimic_cxr_visual_grounded.yaml \
 #   --stages_module stages_visual_grounded --train
-# CUDA_VISIBLE_DEVICES=2 dlhpcstarter -t mimic_cxr_visual_grounded -c config/train_mimic_cxr_visual_grounded.yaml --stages_module stages_visual_grounded --train --trial 9223
+# CUDA_VISIBLE_DEVICES=5 dlhpcstarter -t mimic_cxr_visual_grounded -c config/train_mimic_cxr_visual_grounded.yaml --stages_module stages_visual_grounded --train --trial 9223
