@@ -1,6 +1,8 @@
 """
 Visual-dependence regularised CvT2DistilGPT2 for MIMIC-CXR.
 
+Validation diagnostic fix: 2026-07-13-v2.
+
 This module is intentionally implemented as a subclass of the original
 CvT2DistilGPT2MIMICXRChen model so that the existing dataset, metrics,
 checkpoint layout, DPO/SCST utilities, and generation code remain usable.
@@ -46,6 +48,10 @@ import torch.nn.functional as F
 import transformers
 
 from cvt2distilgpt2_mimic_cxr_chen import CvT2DistilGPT2MIMICXRChen
+from tools.preference_rl import build_decoder_lm_batch
+
+
+VALIDATION_DIAGNOSTIC_FIX_VERSION = "2026-07-13-v2"
 
 
 # The aliases are deliberately radiology-oriented and relatively conservative.
@@ -272,6 +278,7 @@ class CvT2DistilGPT2MIMICXRVisualGrounded(CvT2DistilGPT2MIMICXRChen):
         detach_mismatch_features: bool = True,
         grounding_mask_fallback: str = "none",
         log_grounding_diagnostics: bool = True,
+        strict_grounding_diagnostics: bool = False,
         generation_no_repeat_ngram_size: int = 3,
         generation_repetition_penalty: float = 1.10,
         generation_length_penalty: float = 1.0,
@@ -304,6 +311,8 @@ class CvT2DistilGPT2MIMICXRVisualGrounded(CvT2DistilGPT2MIMICXRChen):
         self.detach_mismatch_features = bool(detach_mismatch_features)
         self.grounding_mask_fallback = grounding_mask_fallback
         self.log_grounding_diagnostics = bool(log_grounding_diagnostics)
+        self.strict_grounding_diagnostics = bool(strict_grounding_diagnostics)
+        self._diagnostic_batch_warning_emitted = False
         self.generation_no_repeat_ngram_size = int(generation_no_repeat_ngram_size)
         self.generation_repetition_penalty = float(generation_repetition_penalty)
         self.generation_length_penalty = float(generation_length_penalty)
@@ -553,29 +562,127 @@ class CvT2DistilGPT2MIMICXRVisualGrounded(CvT2DistilGPT2MIMICXRChen):
         )
         return total_loss
 
+    def _diagnostic_warning(self, message: str) -> None:
+        """Emit a diagnostic warning once on the global-zero process."""
+        if self._diagnostic_batch_warning_emitted:
+            return
+        self._diagnostic_batch_warning_emitted = True
+        if getattr(self, "global_rank", 0) == 0:
+            print(f"[visual-grounding diagnostics skipped] {message}")
+
+    def _prepare_diagnostic_teacher_forcing_batch(
+        self,
+        batch,
+        device: torch.device,
+    ) -> Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+        """Prepare teacher-forcing tensors for val/test grounding diagnostics.
+
+        ``TaskSubset(train=True)`` returns decoder tensors, whereas the original
+        validation/test subsets are generation-oriented and commonly return only
+        ``encoder_images``, ``labels`` and ``id``.  Therefore diagnostics must not
+        directly index ``batch['decoder_input_ids']``.
+
+        The method first reuses decoder tensors when present.  Otherwise it builds
+        the same shifted language-model batch from the reference report strings.
+        Diagnostics are auxiliary, so malformed/missing validation metadata is
+        skipped by default instead of aborting the whole training run.  Set
+        ``strict_grounding_diagnostics=True`` to raise the original exception.
+        """
+        required = (
+            "decoder_input_ids",
+            "decoder_attention_mask",
+            "label_ids",
+        )
+        if all(key in batch for key in required):
+            tensors = tuple(batch[key].to(device) for key in required)
+            return tensors  # type: ignore[return-value]
+
+        reports = batch.get("labels")
+        if reports is None:
+            # Some custom collators use singular ``label``.  Supporting it is
+            # harmless and makes this diagnostic independent of that naming detail.
+            reports = batch.get("label")
+
+        if reports is None:
+            missing = [key for key in required if key not in batch]
+            message = (
+                "validation/test batch contains neither reference report strings "
+                "nor complete teacher-forcing tensors; missing keys: "
+                f"{missing}. Available keys: {sorted(batch.keys())}."
+            )
+            if self.strict_grounding_diagnostics:
+                raise KeyError(message)
+            self._diagnostic_warning(message)
+            return None
+
+        if isinstance(reports, str):
+            reports = [reports]
+        else:
+            reports = [str(report) for report in reports]
+
+        try:
+            lm_batch = build_decoder_lm_batch(
+                self.tokenizer,
+                reports,
+                self.decoder_max_len,
+                device,
+            )
+            decoder_input_ids = lm_batch["decoder_input_ids"]
+            decoder_attention_mask = lm_batch["decoder_attention_mask"]
+            label_ids = lm_batch["label_ids"]
+        except Exception as exc:
+            message = (
+                "failed to reconstruct teacher-forcing tensors from batch reports: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            if self.strict_grounding_diagnostics:
+                raise RuntimeError(message) from exc
+            self._diagnostic_warning(message)
+            return None
+
+        expected_batch = batch["encoder_images"].shape[0]
+        if decoder_input_ids.shape[0] != expected_batch:
+            message = (
+                "reconstructed language-model batch size does not match image batch: "
+                f"text={decoder_input_ids.shape[0]}, image={expected_batch}."
+            )
+            if self.strict_grounding_diagnostics:
+                raise RuntimeError(message)
+            self._diagnostic_warning(message)
+            return None
+
+        return decoder_input_ids, decoder_attention_mask, label_ids
+
     @torch.no_grad()
     def _grounding_diagnostics(self, batch, prefix: str) -> None:
         if not self.log_grounding_diagnostics:
             return
 
-        visual_tokens = self._encode_visual_tokens(batch["encoder_images"])
+        images = batch["encoder_images"]
+        device = images.device
+        diagnostic_batch = self._prepare_diagnostic_teacher_forcing_batch(batch, device)
+        if diagnostic_batch is None:
+            return
+        decoder_input_ids, decoder_attention_mask, label_ids = diagnostic_batch
+
+        visual_tokens = self._encode_visual_tokens(images)
         full_logits = self._decode_visual_tokens(
             visual_tokens,
-            batch["decoder_input_ids"],
-            batch["decoder_attention_mask"],
+            decoder_input_ids,
+            decoder_attention_mask,
         )
         null_logits = self._decode_visual_tokens(
             self._null_visual_tokens(visual_tokens),
-            batch["decoder_input_ids"],
-            batch["decoder_attention_mask"],
+            decoder_input_ids,
+            decoder_attention_mask,
         )
         full_logp, _ = _safe_target_log_probs(
-            full_logits, batch["label_ids"], self.tokenizer.pad_token_id
+            full_logits, label_ids, self.tokenizer.pad_token_id
         )
         null_logp, _ = _safe_target_log_probs(
-            null_logits, batch["label_ids"], self.tokenizer.pad_token_id
+            null_logits, label_ids, self.tokenizer.pad_token_id
         )
-        clinical_mask = self._clinical_mask(batch["label_ids"])
+        clinical_mask = self._clinical_mask(label_ids)
         values = {
             f"{prefix}_null_clinical_gap": _masked_mean(full_logp - null_logp, clinical_mask),
         }
@@ -588,11 +695,11 @@ class CvT2DistilGPT2MIMICXRVisualGrounded(CvT2DistilGPT2MIMICXRChen):
             if indices is not None:
                 mismatch_logits = self._decode_visual_tokens(
                     visual_tokens.index_select(0, indices),
-                    batch["decoder_input_ids"],
-                    batch["decoder_attention_mask"],
+                    decoder_input_ids,
+                    decoder_attention_mask,
                 )
                 mismatch_logp, _ = _safe_target_log_probs(
-                    mismatch_logits, batch["label_ids"], self.tokenizer.pad_token_id
+                    mismatch_logits, label_ids, self.tokenizer.pad_token_id
                 )
                 values[f"{prefix}_mismatch_clinical_gap"] = _masked_mean(
                     full_logp - mismatch_logp, clinical_mask
