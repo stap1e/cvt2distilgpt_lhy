@@ -1,0 +1,84 @@
+exp_dir: /data/lhy_data/rg/results_mimic_cxr_visual_grounded_v2
+dataset_dir: /data/lhy_data/rg
+ckpt_zoo_dir: /data/lhy_data/rg/checkpoints
+seed: 9223
+trial: 9223
+devices: 1
+num_nodes: 1
+num_workers: 6
+strategy: 'auto'
+
+module: cvt2distilgpt2_mimic_cxr_visual_grounded_v2
+definition: CvT2DistilGPT2MIMICXRVisualGroundedV2
+train_mode: 'ce'
+
+# Protect the pretrained language model while learning new visual pathways.
+encoder_lr: 1e-5
+decoder_lr: 1e-4
+decoder_base_lr_scale: 0.20
+cross_attention_lr_scale: 1.00
+planner_lr_scale: 1.00
+weight_decay: 0.01
+
+mbatch_size: 4
+prefetch_factor: 5
+every_n_epochs: 1
+precision: 16
+decoder_max_len: 128
+num_test_beams: 4
+max_epochs: 20
+
+# Clinical balance is more appropriate than template-sensitive CIDEr alone.
+monitor: 'val_ce_f1_macro'
+monitor_mode: 'max'
+early_stopping: true
+patience: 6
+min_delta: 1e-4
+
+# Current-Observable Target Distillation.
+filter_temporal_train_targets: true
+drop_temporal_only_train_examples: true
+temporal_filter_fallback: 'keep_original'
+
+# Query-based Current Evidence Bottleneck.
+planner_num_generic_queries: 16
+planner_num_heads: 8
+planner_dropout: 0.10
+concept_aux_weight: 0.05
+planner_localization_weight: 0.002
+
+# Detached Prior-Calibrated Evidence Gain.
+evidence_margin_weight: 0.05
+evidence_margin: 0.15
+null_sample_mean_weight: 0.50
+grounding_mask_fallback: 'none'
+
+# CE-only warmup, followed by a gradual grounding ramp.
+grounding_warmup_epochs: 2
+grounding_ramp_epochs: 3
+
+# Clinical Context Deprivation and EOS Boundary Calibration.
+context_dropout_rate: 0.12
+context_dropout_max_fraction: 0.35
+eos_calibration_weight: 0.05
+eos_margin: 0.20
+
+log_grounding_diagnostics: true
+strict_grounding_diagnostics: false
+
+# Current-image-only decoding.
+suppress_temporal_generation: true
+generation_min_new_tokens: 4
+generation_no_repeat_ngram_size: 0
+generation_repetition_penalty: 1.0
+generation_length_penalty: 1.0
+
+enable_progress_bar: true
+weights_summary: 'full'
+deterministic: false
+
+# TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=5 dlhpcstarter \
+#   -t mimic_cxr_visual_grounded_v2 \
+#   -c config/train_mimic_cxr_visual_grounded_v2.yaml \
+#   --stages_module stages_visual_grounded_v2 --train --trial 9223
+# CUDA_VISIBLE_DEVICES=5 dlhpcstarter -t mimic_cxr_visual_grounded_v2 -c config/train_mimic_cxr_visual_grounded_v2.yaml --stages_module stages_visual_grounded_v2 --train --trial 9223
