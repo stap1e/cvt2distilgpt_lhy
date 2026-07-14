@@ -20,7 +20,7 @@ cross_attention_lr_scale: 1.00
 planner_lr_scale: 1.00
 weight_decay: 0.01
 
-mbatch_size: 4
+mbatch_size: 16
 prefetch_factor: 5
 every_n_epochs: 1
 precision: 16
