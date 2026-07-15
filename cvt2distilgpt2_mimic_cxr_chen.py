@@ -40,6 +40,7 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
             num_test_beams: int,
             prefetch_factor: int = 5,
             num_workers: int = 0,
+            use_chen_vocab_preprocessing: bool = False,
             train_mode: str = "ce",
             dpo_pair_path: Optional[str] = None,
             dpo_beta: float = 0.1,
@@ -72,6 +73,7 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
         self.num_test_beams = num_test_beams
         self.prefetch_factor = prefetch_factor
         self.num_workers = num_workers
+        self.use_chen_vocab_preprocessing = bool(use_chen_vocab_preprocessing)
         self.train_mode = train_mode
         self.dpo_pair_path = dpo_pair_path
         self.dpo_beta = dpo_beta
@@ -365,10 +367,14 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
     def format_examples(self, examples):
         for i in examples:
             i["image_file_path"] = i.pop("image_path")
-            i["label"] = i.pop("report")
+            report = i.pop("report")
             i["image_file_path"] = [os.path.join(self.dataset_dir, j) for j in i["image_file_path"]]
-            i["label"] = self.chen_tokenizer(i["label"])[:self.chen_max_seq_length]
-            i["label"] = self.chen_tokenizer.decode(i["label"][1:])
+            if self.use_chen_vocab_preprocessing:
+                token_ids = self.chen_tokenizer(report)[:self.chen_max_seq_length]
+                report = self.chen_tokenizer.decode(token_ids[1:])
+            else:
+                report = self.chen_tokenizer.clean_report(report)
+            i["label"] = report
         return examples
 
     def train_dataloader(self, shuffle=True):
