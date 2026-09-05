@@ -1,0 +1,106 @@
+# Form B: on-policy distillation (dense teacher-reward GKD) on COVAR-V2.
+# Warm-start from a trained COVAR-V2 CE checkpoint (stage 1), then iterate:
+# export rollouts -> teacher scores -> train one round -> repeat.
+#
+# Round loop (round r = 1, 2, ...):
+#   python -m tools.distillation.export_rollouts \
+#     --config config/new_lab/train_covar_gkd.yaml \
+#     --ckpt-path <stage1-or-round-(r-1) ckpt> --split train \
+#     --num-samples 4 --round r \
+#     --out /data/lhy_data/rg/results_new_lab/gkd_pool/rollouts_round{r}.jsonl \
+#     --device cuda:5
+#   python -m tools.distillation.teacher_score --mode tokens \
+#     --rollouts /data/lhy_data/rg/results_new_lab/gkd_pool/rollouts_round{r}.jsonl \
+#     --out /data/lhy_data/rg/results_new_lab/gkd_pool/scored_round{r}.jsonl \
+#     --config config/new_lab/train_covar_gkd.yaml \
+#     --teacher mock   # replace with the real teacher (different device!)
+#   CUDA_VISIBLE_DEVICES=5 dlhpcstarter -t covar_gkd \
+#     -c config/new_lab/train_covar_gkd.yaml \
+#     --stages_module stages_visual_grounded_v2 --train --trial <r> \
+#     --warm_start_ckpt_path <previous ckpt>
+#
+# gkd_rollout_path is a DIRECTORY: training always loads the newest round
+# file inside it, so each round only drops a new scored_round{r}.jsonl there.
+exp_dir: /data/lhy_data/rg/results_new_lab/covar_gkd
+dataset_dir: /data/lhy_data/rg
+ckpt_zoo_dir: /data/lhy_data/rg/checkpoints
+seed: 9223
+trial: 1
+devices: 1
+num_nodes: 1
+num_workers: 6
+strategy: 'auto'
+
+module: cvt2distilgpt2_mimic_cxr_visual_grounded_v2
+definition: CvT2DistilGPT2MIMICXRVisualGroundedV2
+train_mode: 'gkd'
+run_record: true
+
+gkd_rollout_path: /data/lhy_data/rg/results_new_lab/gkd_pool
+gkd_objective: 'dense_rl'        # 'dense_rl' | 'best_of_k'
+gkd_weight: 1.0
+gkd_reference_ce_scale: 1.0      # COVAR anchor branch scale
+gkd_advantage_baseline: 'sequence_mean'  # 'sequence_mean' | 'greedy_score'
+gkd_reward_norm: 'whiten'        # 'whiten' | 'none'
+gkd_adv_clip: 3.0
+gkd_include_greedy: false
+gkd_best_of_k_min_gap: 0.0
+
+# Stage-2 fine-tune: keep grounding regularisers fully on from epoch 0.
+grounding_warmup_epochs: 0
+grounding_ramp_epochs: 1
+
+encoder_lr: 1e-5
+decoder_lr: 1e-4
+decoder_base_lr_scale: 0.20
+cross_attention_lr_scale: 1.00
+planner_lr_scale: 1.00
+weight_decay: 0.01
+
+mbatch_size: 16
+prefetch_factor: 5
+every_n_epochs: 1
+precision: 16
+decoder_max_len: 128
+num_test_beams: 4
+max_epochs: 4
+
+monitor: 'val_ce_f1_macro'
+monitor_mode: 'max'
+early_stopping: true
+patience: 2
+min_delta: 1e-4
+
+filter_temporal_train_targets: true
+drop_temporal_only_train_examples: true
+temporal_filter_fallback: 'keep_original'
+target_preprocessing: 'chen_vocab'
+
+planner_num_generic_queries: 16
+planner_num_heads: 8
+planner_dropout: 0.10
+concept_aux_weight: 0.05
+planner_localization_weight: 0.002
+
+evidence_margin_weight: 0.05
+evidence_margin: 0.15
+null_sample_mean_weight: 0.50
+grounding_mask_fallback: 'none'
+
+context_dropout_rate: 0.12
+context_dropout_max_fraction: 0.35
+eos_calibration_weight: 0.05
+eos_margin: 0.20
+
+log_grounding_diagnostics: true
+strict_grounding_diagnostics: false
+
+suppress_temporal_generation: true
+generation_min_new_tokens: 4
+generation_no_repeat_ngram_size: 0
+generation_repetition_penalty: 1.0
+generation_length_penalty: 1.0
+
+enable_progress_bar: true
+weights_summary: 'full'
+deterministic: false

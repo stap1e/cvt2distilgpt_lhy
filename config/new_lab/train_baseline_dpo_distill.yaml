@@ -1,0 +1,49 @@
+# Form C ablation: teacher-ranked DPO on the plain baseline model
+# (module: cvt2distilgpt2_mimic_cxr_chen), for comparison against the COVAR-V2
+# variant in config/new_lab/train_covar_dpo_distill.yaml.
+# Pair generation pipeline is identical (see the COVAR config header).
+#
+#   CUDA_VISIBLE_DEVICES=5 dlhpcstarter -t baseline_dpo_distill \
+#     -c config/new_lab/train_baseline_dpo_distill.yaml \
+#     --stages_module stages --train --trial 1 \
+#     --warm_start_ckpt_path <baseline CE ckpt>
+exp_dir: /data/lhy_data/rg/results_new_lab/baseline_dpo_distill
+dataset_dir: /data/lhy_data/rg
+ckpt_zoo_dir: /data/lhy_data/rg/checkpoints
+seed: 9223
+trial: 1
+devices: 1
+num_nodes: 1
+num_workers: 6
+strategy: 'auto'
+
+module: cvt2distilgpt2_mimic_cxr_chen
+definition: CvT2DistilGPT2MIMICXRChen
+train_mode: dpo
+run_record: true
+
+dpo_pair_path: /data/lhy_data/rg/results_new_lab/dpo/pairs_round1_ref.jsonl
+dpo_beta: 0.1
+dpo_ce_weight: 0.1
+dpo_reference_free: false
+dpo_missing_pair_policy: ce
+
+encoder_lr: 1e-6
+decoder_lr: 1e-5
+mbatch_size: 16
+every_n_epochs: 1
+
+monitor: 'val_chen_cider'
+monitor_mode: 'max'
+precision: 16
+decoder_max_len: 128
+num_test_beams: 4
+max_epochs: 10
+
+enable_progress_bar: true
+weights_summary: 'full'
+
+early_stopping: true
+patience: 4
+min_delta: 1e-4
+deterministic: false

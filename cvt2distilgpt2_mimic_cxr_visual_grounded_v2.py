@@ -765,175 +765,17 @@ import json as _covar_json
 import os as _covar_os
 from dataclasses import dataclass as _covar_dataclass
 
+from torch.utils.data import DataLoader as _COVARDataLoader
+
 from tools.dataset.mimc_cxr_chen import TaskSubset as _COVARTaskSubset
 
-
-COVAR_V2_VERSION = "2026-07-14-covar-v2"
-
-
-class CurrentObservableReportFilterV2:
-    """Distil single-image-observable statements from a MIMIC-CXR report.
-
-    The filter is used on TRAINING targets only. Validation and test references
-    remain unchanged, so standard MIMIC-CXR metrics are still calculated.
-    """
-
-    _split_re = re.compile(r"(?<=[.!?])\s+|\n+")
-    _leading_comparison_re = re.compile(
-        r"^(?:as\s+)?(?:compared\s+(?:to|with)|in\s+comparison\s+(?:to|with))"
-        r"[^,.;:]*[,;:]\s*",
-        re.IGNORECASE,
-    )
-    _temporal_re = re.compile(
-        r"\b(?:"
-        r"compared\s+(?:to|with)|comparison\s+(?:to|with)|previous|prior|"
-        r"interval(?:\s+(?:change|development))?|unchanged|stable|"
-        r"no\s+(?:relevant|significant)?\s*change|improved|worsened|"
-        r"increased\s+since|decreased\s+since|new(?:\s+since)?|"
-        r"again\s+(?:seen|noted)|since\s+the\s+(?:last|previous|prior)|"
-        r"has\s+been\s+(?:extubated|intubated|removed|placed|inserted|advanced|retracted)|"
-        r"was\s+(?:removed|placed|inserted|advanced|retracted)"
-        r")\b",
-        re.IGNORECASE,
-    )
-
-    _device_rewrites = (
-        (
-            re.compile(r"\b(?:the\s+patient\s+)?has\s+been\s+extubated\b", re.I),
-            "the endotracheal tube is not present",
-        ),
-        (
-            re.compile(r"\b(?:the\s+patient\s+)?has\s+been\s+intubated\b", re.I),
-            "an endotracheal tube is present",
-        ),
-        (
-            re.compile(
-                r"\b(?:the\s+)?(?:nasogastric|enteric|feeding)\s+tube\s+"
-                r"(?:has\s+been|was)\s+removed\b",
-                re.I,
-            ),
-            "the enteric tube is not present",
-        ),
-        (
-            re.compile(
-                r"\b(?:the\s+)?(?:nasogastric|enteric|feeding)\s+tube\s+"
-                r"(?:has\s+been|was)\s+(?:placed|inserted)\b",
-                re.I,
-            ),
-            "an enteric tube is present",
-        ),
-        (
-            re.compile(
-                r"\b(?:the\s+patient\s+)?has\s+received\s+(?:a\s+)?"
-                r"(?:nasogastric|enteric|feeding)\s+tube\b",
-                re.I,
-            ),
-            "an enteric tube is present",
-        ),
-        (
-            re.compile(
-                r"\b(?:the\s+)?chest\s+tube\s+(?:has\s+been|was)\s+removed\b",
-                re.I,
-            ),
-            "the chest tube is not present",
-        ),
-        (
-            re.compile(
-                r"\b(?:the\s+)?(?:central\s+(?:venous\s+)?(?:line|catheter)|picc)\s+"
-                r"(?:has\s+been|was)\s+(?:placed|inserted)\b",
-                re.I,
-            ),
-            "a central venous catheter is present",
-        ),
-    )
-
-    def __init__(self, fallback: str = "keep_original", min_words: int = 3):
-        if fallback not in {"keep_original", "keep_longest"}:
-            raise ValueError(
-                "temporal_filter_fallback must be 'keep_original' or 'keep_longest'."
-            )
-        self.fallback = fallback
-        self.min_words = int(min_words)
-
-    @staticmethod
-    def _normalise_sentence(sentence: str) -> str:
-        sentence = re.sub(r"\s+", " ", sentence).strip(" \t\r\n.;")
-        return sentence + "." if sentence else ""
-
-    def _rewrite_device_transition(self, sentence: str) -> Optional[str]:
-        rewritten = sentence
-        changed = False
-        for pattern, replacement in self._device_rewrites:
-            if pattern.search(rewritten):
-                rewritten = pattern.sub(replacement, rewritten)
-                changed = True
-        if not changed:
-            return None
-        rewritten = self._leading_comparison_re.sub("", rewritten)
-        rewritten = re.sub(r"\s+", " ", rewritten).strip()
-        if self._temporal_re.search(rewritten):
-            return None
-        return self._normalise_sentence(rewritten)
-
-    def filter_report(self, report: str):
-        raw = re.sub(r"\s+", " ", str(report)).strip()
-        if not raw:
-            return raw, {"removed": 0, "rewritten": 0, "fallback": 0}
-
-        sentences = [s.strip() for s in self._split_re.split(raw) if s.strip()]
-        if not sentences:
-            sentences = [raw]
-
-        kept = []
-        removed = 0
-        rewritten_count = 0
-
-        for sentence in sentences:
-            without_prefix = self._leading_comparison_re.sub("", sentence).strip()
-            if (
-                without_prefix != sentence
-                and without_prefix
-                and not self._temporal_re.search(without_prefix)
-            ):
-                kept.append(self._normalise_sentence(without_prefix))
-                rewritten_count += 1
-                continue
-
-            device_state = self._rewrite_device_transition(sentence)
-            if device_state is not None:
-                kept.append(device_state)
-                rewritten_count += 1
-                continue
-
-            if self._temporal_re.search(sentence):
-                removed += 1
-                continue
-
-            normalised = self._normalise_sentence(sentence)
-            if normalised:
-                kept.append(normalised)
-
-        filtered = " ".join(kept).strip()
-        if len(filtered.split()) >= self.min_words:
-            return filtered, {
-                "removed": removed,
-                "rewritten": rewritten_count,
-                "fallback": 0,
-            }
-
-        fallback_text = (
-            max(sentences, key=lambda x: len(x.split()))
-            if self.fallback == "keep_longest"
-            else raw
-        )
-        return fallback_text, {
-            "removed": removed,
-            "rewritten": rewritten_count,
-            "fallback": 1,
-        }
-
-    def contains_temporal_claim(self, report: str) -> bool:
-        return bool(self._temporal_re.search(str(report)))
+# The current-observable filter now lives in tools/distillation (torch-free)
+# so the offline teacher CLIs reuse exactly the training-time filter. The
+# class name is re-exported here for checkpoint/backwards compatibility.
+from tools.distillation.current_observable import (  # noqa: E402
+    COVAR_V2_VERSION,
+    CurrentObservableReportFilterV2,
+)
 
 
 CURRENT_TOKEN_ONLY_PHRASES_V2 = (
@@ -1286,14 +1128,48 @@ class CvT2DistilGPT2MIMICXRVisualGroundedV2(
         generation_no_repeat_ngram_size: int = 0,
         generation_repetition_penalty: float = 1.0,
         generation_length_penalty: float = 1.0,
+        target_preprocessing: str = "chen_vocab",
+        gkd_rollout_path: Optional[str] = None,
+        gkd_objective: str = "dense_rl",
+        gkd_weight: float = 1.0,
+        gkd_reference_ce_scale: float = 1.0,
+        gkd_advantage_baseline: str = "sequence_mean",
+        gkd_reward_norm: str = "whiten",
+        gkd_adv_clip: float = 3.0,
+        gkd_include_greedy: bool = False,
+        gkd_best_of_k_min_gap: float = 0.0,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
 
-        if self.train_mode != "ce":
+        if self.train_mode not in {"ce", "gkd", "dpo"}:
             raise ValueError(
-                "COVAR-V2 currently supports train_mode='ce' only."
+                "COVAR-V2 supports train_mode in {'ce', 'gkd', 'dpo'}. 'gkd' "
+                "trains on offline teacher-scored rollouts (Form B); 'dpo' "
+                "reuses the parent stage-2 implementation (Form C); 'scst' "
+                "is intentionally not supported on the COVAR line."
             )
+        if self.train_mode == "gkd" and not gkd_rollout_path:
+            raise ValueError(
+                "train_mode='gkd' requires gkd_rollout_path pointing at a "
+                "scored-rollout JSONL (or a directory of them) produced by "
+                "tools/distillation/export_rollouts.py + teacher_score.py."
+            )
+        if target_preprocessing not in {"chen_vocab", "clean_only"}:
+            raise ValueError(
+                "target_preprocessing must be 'chen_vocab' or 'clean_only'."
+            )
+        if gkd_objective not in {"dense_rl", "best_of_k"}:
+            raise ValueError(
+                "gkd_objective must be 'dense_rl' or 'best_of_k'."
+            )
+        if gkd_advantage_baseline not in {"sequence_mean", "greedy_score"}:
+            raise ValueError(
+                "gkd_advantage_baseline must be 'sequence_mean' or "
+                "'greedy_score'."
+            )
+        if gkd_reward_norm not in {"whiten", "none"}:
+            raise ValueError("gkd_reward_norm must be 'whiten' or 'none'.")
         if grounding_mask_fallback not in {"none", "valid"}:
             raise ValueError(
                 "grounding_mask_fallback must be 'none' or 'valid'."
@@ -1313,6 +1189,19 @@ class CvT2DistilGPT2MIMICXRVisualGroundedV2(
         self.drop_temporal_only_train_examples = bool(
             drop_temporal_only_train_examples
         )
+        self.target_preprocessing_v2 = str(target_preprocessing)
+        self.gkd_rollout_path = gkd_rollout_path
+        self.gkd_objective = str(gkd_objective)
+        self.gkd_weight = float(gkd_weight)
+        self.gkd_reference_ce_scale = float(gkd_reference_ce_scale)
+        self.gkd_advantage_baseline = str(gkd_advantage_baseline)
+        self.gkd_reward_norm = str(gkd_reward_norm)
+        self.gkd_adv_clip = float(gkd_adv_clip)
+        self.gkd_include_greedy = bool(gkd_include_greedy)
+        self.gkd_best_of_k_min_gap = float(gkd_best_of_k_min_gap)
+        self.gkd_train_set = None
+        self.gkd_pool_stats_v2 = None
+        self.gkd_greedy_scores_v2 = {}
         self.report_filter_v2 = CurrentObservableReportFilterV2(
             fallback=temporal_filter_fallback
         )
@@ -1415,12 +1304,19 @@ class CvT2DistilGPT2MIMICXRVisualGroundedV2(
                 _covar_os.path.join(self.dataset_dir, path)
                 for path in example["image_file_path"]
             ]
-            token_ids = self.chen_tokenizer(example["label"])[
-                : self.chen_max_seq_length
-            ]
-            example["label"] = self.chen_tokenizer.decode(
-                token_ids[1:]
-            )
+            if self.target_preprocessing_v2 == "clean_only":
+                # Keep full-length, full-vocabulary targets (Form A): the
+                # Chen-vocab decode would map unseen teacher words to <unk>.
+                example["label"] = self.chen_tokenizer.clean_report(
+                    example["label"]
+                )
+            else:
+                token_ids = self.chen_tokenizer(example["label"])[
+                    : self.chen_max_seq_length
+                ]
+                example["label"] = self.chen_tokenizer.decode(
+                    token_ids[1:]
+                )
             formatted.append(example)
 
         if filter_temporal:
@@ -1437,6 +1333,17 @@ class CvT2DistilGPT2MIMICXRVisualGroundedV2(
     def setup(self, stage=None):
         with open(self.labels_file_path) as handle:
             examples = _covar_json.load(handle)
+
+        if self.train_mode == "dpo":
+            from tools.preference_rl import load_dpo_pairs_jsonl
+
+            if self.dpo_pair_path is None:
+                raise ValueError(
+                    "train_mode='dpo' requires dpo_pair_path. Provide the "
+                    "teacher-ranked pairs JSONL from teacher_score.py "
+                    "(--mode rank, then --mode fill-ref-logps)."
+                )
+            self.dpo_pairs = load_dpo_pairs_jsonl(self.dpo_pair_path)
 
         for split in ("train", "val", "test"):
             images = set()
@@ -1478,6 +1385,9 @@ class CvT2DistilGPT2MIMICXRVisualGroundedV2(
                 f"{len(self.train_set)} & {len(self.val_set)}."
             )
 
+            if self.train_mode == "gkd":
+                self._setup_gkd_dataset_v2()
+
         if stage == "test" or stage is None:
             self.test_set = _COVARTaskSubset(
                 examples=self._format_examples_v2(
@@ -1490,6 +1400,73 @@ class CvT2DistilGPT2MIMICXRVisualGroundedV2(
                 add_bos_eos_manually=True,
             )
             print(f"No. of test examples: {len(self.test_set)}.")
+
+    def _setup_gkd_dataset_v2(self):
+        """Load the offline scored-rollout pool (Form B, dense RL)."""
+        from tools.distillation.gkd_pool import GKDPool
+        from tools.distillation.gkd_torch import GKDRolloutSubset
+
+        pool = GKDPool.load(self.gkd_rollout_path)
+        selection = pool.select(
+            objective=self.gkd_objective,
+            include_greedy=self.gkd_include_greedy,
+            best_of_k_min_gap=self.gkd_best_of_k_min_gap,
+        )
+        self.gkd_pool_stats_v2 = pool.stats()
+        self.gkd_greedy_scores_v2 = pool.greedy_teacher_scores()
+
+        self.gkd_train_set = GKDRolloutSubset(
+            examples=self.train_set.examples,
+            selection=selection,
+            tokenizer=self.tokenizer,
+            decoder_max_len=self.decoder_max_len,
+            colour_space="RGB",
+            transforms=self.train_transforms,
+        )
+        print(
+            "[COVAR-V2 GKD] pool_stats="
+            f"{self.gkd_pool_stats_v2}"
+        )
+        print(
+            "[COVAR-V2 GKD] dataset_items="
+            f"{len(self.gkd_train_set)}"
+        )
+        if getattr(self, "run_recorder", None) is not None:
+            self.run_recorder.record_event(
+                "gkd_pool_loaded",
+                {
+                    key: value
+                    for key, value in self.gkd_pool_stats_v2.items()
+                    if key != "sources"
+                },
+            )
+            self.run_recorder.record_event(
+                "gkd_dataset_built",
+                {
+                    "items": len(self.gkd_train_set),
+                    "objective": self.gkd_objective,
+                    "advantage_baseline": self.gkd_advantage_baseline,
+                },
+            )
+
+    def train_dataloader(self, shuffle=True):
+        if (
+            self.train_mode == "gkd"
+            and getattr(self, "gkd_train_set", None) is not None
+        ):
+            from tools.distillation.gkd_torch import gkd_collate
+
+            num_workers = int(self.num_workers or 0)
+            loader_kwargs = {
+                "batch_size": self.mbatch_size,
+                "num_workers": num_workers,
+                "shuffle": True,
+                "collate_fn": gkd_collate,
+            }
+            if num_workers > 0:
+                loader_kwargs["prefetch_factor"] = self.prefetch_factor
+            return _COVARDataLoader(self.gkd_train_set, **loader_kwargs)
+        return super().train_dataloader(shuffle)
 
     # ------------------------------------------------------------------
     # Differential learning rates preserve the pretrained language prior.
@@ -1793,7 +1770,12 @@ class CvT2DistilGPT2MIMICXRVisualGroundedV2(
         if cuda_state is not None and device.type == "cuda":
             torch.cuda.set_rng_state(cuda_state, device)
 
-    def _compute_training_loss_v2(self, batch):
+    def _compute_training_loss_v2(
+        self,
+        batch,
+        precomputed_visual_tokens=None,
+        precomputed_plan=None,
+    ):
         images = batch["encoder_images"]
         label_ids = batch["label_ids"]
         reports = batch["labels"]
@@ -1809,9 +1791,15 @@ class CvT2DistilGPT2MIMICXRVisualGroundedV2(
             scale,
         )
 
-        visual_tokens = self._encode_visual_tokens_v2(images)
+        if precomputed_visual_tokens is None:
+            visual_tokens = self._encode_visual_tokens_v2(images)
+        else:
+            visual_tokens = precomputed_visual_tokens
         rng_before = self._capture_rng_state_v2(images.device)
-        plan = self.evidence_planner_v2(visual_tokens)
+        if precomputed_plan is None:
+            plan = self.evidence_planner_v2(visual_tokens)
+        else:
+            plan = precomputed_plan
         full_logits = self._decode_memory_v2(
             plan.memory,
             decoder_input_ids,
@@ -1939,6 +1927,10 @@ class CvT2DistilGPT2MIMICXRVisualGroundedV2(
         return total_loss, metrics, full_logits
 
     def training_step(self, batch, batch_idx):
+        if self.train_mode == "gkd":
+            return self._training_step_gkd(batch, batch_idx)
+        if self.train_mode == "dpo":
+            return self._training_step_dpo(batch, batch_idx)
         total_loss, metrics, logits = (
             self._compute_training_loss_v2(batch)
         )
@@ -1947,6 +1939,167 @@ class CvT2DistilGPT2MIMICXRVisualGroundedV2(
             on_step=True,
             on_epoch=True,
             batch_size=logits.shape[0],
+            sync_dist=False,
+        )
+        return total_loss
+
+    def _training_step_gkd(self, batch, batch_idx):
+        """On-policy distillation step (Form B).
+
+        - best_of_k: plain COVAR training on the teacher-preferred rollout
+          (stable SFT-style ablation).
+        - dense_rl: per-token REINFORCE with the teacher's aligned log-probs
+          as dense rewards, plus the full COVAR loss on the reference branch
+          as an anchor.
+        """
+        from tools.distillation.gkd_pool import sequence_advantages
+
+        images = batch["encoder_images"]
+        device = images.device
+        batch_size = images.shape[0]
+
+        if self.gkd_objective == "best_of_k":
+            rollout_view = {
+                "encoder_images": images,
+                "decoder_input_ids": batch["rollout_decoder_input_ids"],
+                "decoder_attention_mask": batch[
+                    "rollout_decoder_attention_mask"
+                ],
+                "label_ids": batch["rollout_label_ids"],
+                "labels": batch["rollout_text"],
+            }
+            total_loss, metrics, logits = self._compute_training_loss_v2(
+                rollout_view
+            )
+            teacher_scores = [
+                float(meta.get("teacher_score", 0.0))
+                for meta in batch["gkd_meta"]
+            ]
+            metrics.update(
+                {
+                    "train_gkd_teacher_score": torch.tensor(
+                        sum(teacher_scores) / max(1, len(teacher_scores)),
+                        device=device,
+                    ),
+                }
+            )
+            self.log_dict(
+                metrics,
+                on_step=True,
+                on_epoch=True,
+                batch_size=batch_size,
+                sync_dist=False,
+            )
+            return total_loss
+
+        visual_tokens = self._encode_visual_tokens_v2(images)
+        plan = self.evidence_planner_v2(visual_tokens)
+
+        reference_view = {
+            "encoder_images": images,
+            "decoder_input_ids": batch["reference_decoder_input_ids"],
+            "decoder_attention_mask": batch[
+                "reference_decoder_attention_mask"
+            ],
+            "label_ids": batch["reference_label_ids"],
+            "labels": batch["labels"],
+        }
+        reference_loss, metrics, _ = self._compute_training_loss_v2(
+            reference_view,
+            precomputed_visual_tokens=visual_tokens,
+            precomputed_plan=plan,
+        )
+
+        rollout_logits = self._decode_memory_v2(
+            plan.memory,
+            batch["rollout_decoder_input_ids"],
+            batch["rollout_decoder_attention_mask"],
+        )
+        pad_id = self.tokenizer.pad_token_id
+        label_ids = batch["rollout_label_ids"]
+        safe_labels = label_ids.masked_fill(label_ids == pad_id, 0)
+        log_probs = F.log_softmax(rollout_logits.float(), dim=-1).gather(
+            -1, safe_labels.unsqueeze(-1)
+        ).squeeze(-1)
+
+        scores = batch["gkd_teacher_logps"].to(
+            device=device, dtype=torch.float32
+        )
+        score_mask = batch["gkd_teacher_mask"].to(
+            device=device, dtype=torch.float32
+        )
+        max_len = label_ids.shape[1]
+        scores = scores[:, :max_len]
+        score_mask = score_mask[:, :max_len]
+
+        advantages = torch.zeros_like(scores)
+        for row in range(batch_size):
+            valid_scores = scores[row][score_mask[row] > 0].tolist()
+            if not valid_scores:
+                continue
+            row_baseline = self.gkd_advantage_baseline
+            baseline_value = None
+            if row_baseline == "greedy_score":
+                baseline_value = self.gkd_greedy_scores_v2.get(
+                    str(batch["id"][row])
+                )
+                if baseline_value is None:
+                    row_baseline = "sequence_mean"
+            row_advantages = sequence_advantages(
+                valid_scores,
+                baseline=row_baseline,
+                baseline_value=baseline_value,
+                clip=self.gkd_adv_clip,
+                normalise=self.gkd_reward_norm,
+            )
+            advantages[row, : len(row_advantages)] = torch.tensor(
+                row_advantages,
+                device=device,
+                dtype=advantages.dtype,
+            )
+
+        valid = score_mask > 0
+        denom = valid.sum().clamp_min(1.0)
+        gkd_loss = -(
+            (advantages.detach() * log_probs) * valid
+        ).sum() / denom
+        total_loss = (
+            self.gkd_weight * gkd_loss
+            + self.gkd_reference_ce_scale * reference_loss
+        )
+
+        teacher_scores = [
+            float(meta.get("teacher_score", 0.0))
+            for meta in batch["gkd_meta"]
+        ]
+        metrics.update(
+            {
+                "train_loss": total_loss,
+                "train_total_loss": total_loss,
+                "train_gkd_loss": gkd_loss.detach(),
+                "train_gkd_reward_token_mean": (
+                    (scores * valid).sum() / denom
+                ).detach(),
+                "train_gkd_advantage_mean": (
+                    (advantages.detach() * valid).sum() / denom
+                ).detach(),
+                "train_gkd_rollout_logp_mean": (
+                    (log_probs.detach() * valid).sum() / denom
+                ).detach(),
+                "train_gkd_teacher_score": torch.tensor(
+                    sum(teacher_scores) / max(1, len(teacher_scores)),
+                    device=device,
+                ),
+                "train_gkd_valid_token_ratio": (
+                    valid.float().sum(dim=1) / float(max_len)
+                ).mean().detach(),
+            }
+        )
+        self.log_dict(
+            metrics,
+            on_step=True,
+            on_epoch=True,
+            batch_size=batch_size,
             sync_dist=False,
         )
         return total_loss

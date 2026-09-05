@@ -41,6 +41,8 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
             prefetch_factor: int = 5,
             num_workers: int = 0,
             use_chen_vocab_preprocessing: bool = False,
+            annotation_file: str = "annotation.json",
+            run_record: bool = False,
             train_mode: str = "ce",
             dpo_pair_path: Optional[str] = None,
             dpo_beta: float = 0.1,
@@ -74,6 +76,7 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
         self.prefetch_factor = prefetch_factor
         self.num_workers = num_workers
         self.use_chen_vocab_preprocessing = bool(use_chen_vocab_preprocessing)
+        self.run_record = bool(run_record)
         self.train_mode = train_mode
         self.dpo_pair_path = dpo_pair_path
         self.dpo_beta = dpo_beta
@@ -94,8 +97,10 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
         self.dpo_pairs = {}
         self._dpo_reference_free_warned = False
 
-        if self.train_mode not in {"ce", "dpo", "scst"}:
-            raise ValueError(f'Unsupported train_mode: {self.train_mode}. Expected "ce", "dpo", or "scst".')
+        if self.train_mode not in {"ce", "dpo", "scst", "gkd"}:
+            raise ValueError(
+                f'Unsupported train_mode: {self.train_mode}. Expected "ce", "dpo", "scst", or "gkd".'
+            )
         if self.dpo_missing_pair_policy not in {"ce", "skip"}:
             raise ValueError(
                 f'Unsupported dpo_missing_pair_policy: {self.dpo_missing_pair_policy}. '
@@ -114,7 +119,7 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
         self.labels_file_path = os.path.join(
             self.dataset_dir,
             "mimic_cxr_chen",
-            "annotation.json",
+            annotation_file,
         )
         self.dataset_dir = os.path.join(
             self.dataset_dir,
@@ -155,6 +160,26 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
         # Report logging:
         self.val_report_logger = ReportLogger(exp_dir=self.exp_dir_trial, split='val_reports')
         self.test_report_logger = ReportLogger(exp_dir=self.exp_dir_trial, split='test_reports')
+
+        # Algorithmic run record (new_lab): loss components and metrics only,
+        # never compute-consumption statistics.
+        self.run_recorder = None
+        if self.run_record:
+            from tools.distillation.run_recorder import RunRecorder
+
+            self.run_recorder = RunRecorder(
+                exp_dir=self.exp_dir_trial,
+                run_name=f"{self.train_mode}",
+                meta={
+                    "train_mode": self.train_mode,
+                    "encoder_lr": self.encoder_lr,
+                    "decoder_lr": self.decoder_lr,
+                    "mbatch_size": self.mbatch_size,
+                    "decoder_max_len": self.decoder_max_len,
+                    "annotation_file": annotation_file,
+                    "use_chen_vocab_preprocessing": self.use_chen_vocab_preprocessing,
+                },
+            )
 
         # Encoder:
         self.encoder = CvT(
@@ -635,6 +660,16 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
             'train_ce_loss': ce_loss,
             'dpo_pair_coverage': torch.tensor(coverage, device=device),
         }
+        reward_chosen_values = [float(p['reward_chosen']) for p in pair_rows if 'reward_chosen' in p]
+        reward_rejected_values = [float(p['reward_rejected']) for p in pair_rows if 'reward_rejected' in p]
+        if reward_chosen_values:
+            log_values['train_dpo_reward_chosen'] = torch.tensor(
+                sum(reward_chosen_values) / len(reward_chosen_values), device=device
+            )
+        if reward_rejected_values:
+            log_values['train_dpo_reward_rejected'] = torch.tensor(
+                sum(reward_rejected_values) / len(reward_rejected_values), device=device
+            )
         log_values.update(dpo_metrics)
         self.log_dict(log_values, on_step=True, on_epoch=True, batch_size=ce_logits.shape[0])
         return total_loss
@@ -727,6 +762,25 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
         self.val_chexbert_metrics.update(generated, batch['labels'], ids=batch['id'])
         self.val_coco_metrics.update(generated, [[i] for i in batch['labels']], ids=batch['id'])
 
+    def _record_epoch_metrics(self, kind: str):
+        """Append whitelisted metrics to the new_lab run record (rank 0)."""
+        recorder = getattr(self, "run_recorder", None)
+        if recorder is None or self._trainer is None:
+            return
+        if getattr(self, "global_rank", 0) != 0:
+            return
+        from tools.distillation.run_recorder import collect_callback_metrics
+
+        recorder.record_epoch_metrics(
+            self.current_epoch, kind, collect_callback_metrics(self.trainer.callback_metrics)
+        )
+
+    def on_train_epoch_end(self):
+        """
+        https://lightning.ai/docs/pytorch/stable/common/lightning_module.html#on-train-epoch-end
+        """
+        self._record_epoch_metrics("train")
+
     def on_validation_epoch_end(self):
         """
         https://lightning.ai/docs/pytorch/stable/common/lightning_module.html#on-validation-epoch-end
@@ -746,6 +800,7 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
         self.val_coco_metrics.reset()
 
         self.log_dict({f'val_{k}': v for k, v in scores.items()}, on_step=False, on_epoch=True)
+        self._record_epoch_metrics("val")
 
     def test_step(self, batch, batch_idx):
         """
@@ -785,3 +840,4 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
         self.test_coco_metrics.reset()
 
         self.log_dict({f'test_{k}': v for k, v in scores.items()}, on_step=False, on_epoch=True)
+        self._record_epoch_metrics("test")
