@@ -1096,6 +1096,18 @@ class CvT2DistilGPT2MIMICXRVisualGroundedV2(
 ):
     """COVAR-V2: current-observable, evidence-bottlenecked report generation."""
 
+    # COVAR-V2's own loss terms on the training progress bar (see
+    # _log_train_metrics in the parent class for the logging policy).
+    TRAIN_LOSS_PROG_BAR_KEYS = (
+        "train_ce_loss",
+        "train_evidence_margin_loss",
+        "train_concept_aux_loss",
+        "train_planner_localization_loss",
+        "train_eos_boundary_loss",
+        "train_gkd_loss",
+        "train_dpo_loss",
+    )
+
     def __init__(
         self,
         *args,
@@ -1489,27 +1501,32 @@ class CvT2DistilGPT2MIMICXRVisualGroundedV2(
                 "params": self.encoder.parameters(),
                 "lr": self.encoder_lr,
                 "weight_decay": self.weight_decay_v2,
+                "name": "encoder",
             },
             {
                 "params": self.encoder_projection.parameters(),
                 "lr": self.decoder_lr,
                 "weight_decay": self.weight_decay_v2,
+                "name": "projection",
             },
             {
                 "params": decoder_base,
                 "lr": self.decoder_lr * self.decoder_base_lr_scale,
                 "weight_decay": self.weight_decay_v2,
+                "name": "decoder_base",
             },
             {
                 "params": decoder_cross,
                 "lr": self.decoder_lr
                 * self.cross_attention_lr_scale,
                 "weight_decay": self.weight_decay_v2,
+                "name": "decoder_cross",
             },
             {
                 "params": self.evidence_planner_v2.parameters(),
                 "lr": self.decoder_lr * self.planner_lr_scale,
                 "weight_decay": self.weight_decay_v2,
+                "name": "planner",
             },
         ]
         return {
@@ -1934,13 +1951,7 @@ class CvT2DistilGPT2MIMICXRVisualGroundedV2(
         total_loss, metrics, logits = (
             self._compute_training_loss_v2(batch)
         )
-        self.log_dict(
-            metrics,
-            on_step=True,
-            on_epoch=True,
-            batch_size=logits.shape[0],
-            sync_dist=False,
-        )
+        self._log_train_metrics(metrics, logits.shape[0])
         return total_loss
 
     def _training_step_gkd(self, batch, batch_idx):
@@ -1983,13 +1994,7 @@ class CvT2DistilGPT2MIMICXRVisualGroundedV2(
                     ),
                 }
             )
-            self.log_dict(
-                metrics,
-                on_step=True,
-                on_epoch=True,
-                batch_size=batch_size,
-                sync_dist=False,
-            )
+            self._log_train_metrics(metrics, batch_size)
             return total_loss
 
         visual_tokens = self._encode_visual_tokens_v2(images)
@@ -2095,13 +2100,7 @@ class CvT2DistilGPT2MIMICXRVisualGroundedV2(
                 ).mean().detach(),
             }
         )
-        self.log_dict(
-            metrics,
-            on_step=True,
-            on_epoch=True,
-            batch_size=batch_size,
-            sync_dist=False,
-        )
+        self._log_train_metrics(metrics, batch_size)
         return total_loss
 
     # ------------------------------------------------------------------

@@ -443,9 +443,9 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
         https://lightning.ai/docs/pytorch/stable/common/lightning_module.html#configure-optimizers
         """
         grouped_parameters = [
-            {"params": self.encoder.parameters(), 'lr': self.encoder_lr},
-            {"params": self.encoder_projection.parameters(), 'lr': self.decoder_lr},
-            {"params": self.decoder.parameters(), 'lr': self.decoder_lr},
+            {"params": self.encoder.parameters(), 'lr': self.encoder_lr, 'name': 'encoder'},
+            {"params": self.encoder_projection.parameters(), 'lr': self.decoder_lr, 'name': 'projection'},
+            {"params": self.decoder.parameters(), 'lr': self.decoder_lr, 'name': 'decoder'},
         ]
 
         optimiser = {'optimizer': torch.optim.AdamW(grouped_parameters, lr=self.decoder_lr)}
@@ -527,6 +527,53 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
 
         return outputs['sequences']
 
+    # Loss terms shown on the training progress bar. The total is already
+    # displayed by Lightning as the automatic `loss`; everything else stays
+    # logger-only, and non-loss diagnostics are logged once per epoch only.
+    TRAIN_LOSS_PROG_BAR_KEYS = (
+        'train_ce_loss',
+        'train_dpo_loss',
+        'train_scst_loss',
+    )
+
+    # Headline validation metrics shown on the progress bar and in the
+    # epoch-end console summary.
+    VAL_SUMMARY_BAR_KEYS = (
+        'val_ce_f1_macro',
+        'val_chen_cider',
+        'val_chen_bleu_4',
+    )
+
+    def _log_train_metrics(self, metrics, batch_size):
+        """Log training metrics, keeping the progress bar and CSV compact."""
+        step_metrics = {
+            key: value for key, value in metrics.items()
+            if key in self.TRAIN_LOSS_PROG_BAR_KEYS
+            or key in ('train_loss', 'train_total_loss')
+        }
+        epoch_metrics = {
+            key: value for key, value in metrics.items()
+            if key not in step_metrics
+        }
+        if step_metrics:
+            self.log_dict(
+                step_metrics,
+                on_step=True,
+                on_epoch=True,
+                batch_size=batch_size,
+                prog_bar={
+                    key: key in self.TRAIN_LOSS_PROG_BAR_KEYS
+                    for key in step_metrics
+                },
+            )
+        if epoch_metrics:
+            self.log_dict(
+                epoch_metrics,
+                on_step=False,
+                on_epoch=True,
+                batch_size=batch_size,
+            )
+
     def _compute_ce_loss(self, batch):
         # Inference:
         y_hat = self(
@@ -543,11 +590,9 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
 
     def _training_step_ce(self, batch, batch_idx):
         ce_loss, y_hat = self._compute_ce_loss(batch)
-        self.log_dict(
+        self._log_train_metrics(
             {'train_loss': ce_loss, 'train_ce_loss': ce_loss},
-            on_step=True,
-            on_epoch=True,
-            batch_size=y_hat.shape[0],
+            y_hat.shape[0],
         )
         return ce_loss
 
@@ -601,16 +646,14 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
             image_indices.append(i)
 
         if not pair_rows:
-            self.log_dict(
+            self._log_train_metrics(
                 {
                     'train_loss': ce_loss,
                     'train_ce_loss': ce_loss,
                     'train_total_loss': ce_loss,
                     'dpo_pair_coverage': torch.tensor(0.0, device=device),
                 },
-                on_step=True,
-                on_epoch=True,
-                batch_size=ce_logits.shape[0],
+                ce_logits.shape[0],
             )
             return ce_loss
 
@@ -671,7 +714,7 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
                 sum(reward_rejected_values) / len(reward_rejected_values), device=device
             )
         log_values.update(dpo_metrics)
-        self.log_dict(log_values, on_step=True, on_epoch=True, batch_size=ce_logits.shape[0])
+        self._log_train_metrics(log_values, ce_logits.shape[0])
         return total_loss
 
     def _training_step_scst(self, batch, batch_idx):
@@ -715,7 +758,7 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
 
         scst_loss = -(advantage.detach() * sampled_logps).mean()
         total_loss = self.rl_weight * scst_loss + self.rl_ce_weight * ce_loss
-        self.log_dict(
+        self._log_train_metrics(
             {
                 'train_loss': total_loss,
                 'train_total_loss': total_loss,
@@ -725,9 +768,7 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
                 'train_advantage': advantage.mean(),
                 'train_ce_loss': ce_loss,
             },
-            on_step=True,
-            on_epoch=True,
-            batch_size=ce_logits.shape[0],
+            ce_logits.shape[0],
         )
         return total_loss
 
@@ -775,11 +816,63 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
             self.current_epoch, kind, collect_callback_metrics(self.trainer.callback_metrics)
         )
 
+    def on_train_batch_start(self, batch, batch_idx):
+        """
+        Show the per-group learning rates on the progress bar. There is no
+        scheduler, so these stay constant and are kept off the loggers.
+        """
+        lr_metrics = {
+            f"lr_{group['name']}": group['lr']
+            for optimizer in self.optimizers()
+            for group in optimizer.param_groups
+            if group.get('name')
+        }
+        if lr_metrics:
+            self.log_dict(
+                lr_metrics,
+                on_step=True,
+                on_epoch=False,
+                prog_bar=True,
+                logger=False,
+            )
+
+    def _print_epoch_summary(self, kind):
+        """Print one compact console line at the end of a train/val epoch."""
+        if self._trainer is None or getattr(self, 'global_rank', 0) != 0:
+            return
+        if self.trainer.sanity_checking:
+            return
+
+        metrics = self.trainer.callback_metrics
+        if kind == 'train':
+            parts = []
+            if 'train_loss' in metrics:
+                parts.append(f"loss={float(metrics['train_loss']):.4g}")
+            parts.extend(
+                f"{key[len('train_'):-len('_loss')]}={float(metrics[key]):.4g}"
+                for key in sorted(metrics)
+                if key.startswith('train_')
+                and key.endswith('_loss')
+                and key not in ('train_loss', 'train_total_loss')
+            )
+        else:
+            parts = [
+                f"{key}={float(metrics[key]):.4g}"
+                for key in self.VAL_SUMMARY_BAR_KEYS
+                if key in metrics
+            ]
+        if parts:
+            print(
+                f"[{kind} epoch {self.current_epoch}] " + ', '.join(parts),
+                flush=True,
+            )
+
     def on_train_epoch_end(self):
         """
         https://lightning.ai/docs/pytorch/stable/common/lightning_module.html#on-train-epoch-end
         """
         self._record_epoch_metrics("train")
+        self._print_epoch_summary("train")
 
     def on_validation_epoch_end(self):
         """
@@ -799,7 +892,16 @@ class CvT2DistilGPT2MIMICXRChen(LightningModule):
         scores.update(output)
         self.val_coco_metrics.reset()
 
-        self.log_dict({f'val_{k}': v for k, v in scores.items()}, on_step=False, on_epoch=True)
+        self.log_dict(
+            {f'val_{k}': v for k, v in scores.items()},
+            on_step=False,
+            on_epoch=True,
+            prog_bar={
+                f'val_{k}': f'val_{k}' in self.VAL_SUMMARY_BAR_KEYS
+                for k in scores
+            },
+        )
+        self._print_epoch_summary("val")
         self._record_epoch_metrics("val")
 
     def test_step(self, batch, batch_idx):
